@@ -1,0 +1,19 @@
+{
+  "watch": [
+    "src"
+  ],
+  "ignore": [
+    "data/**",
+    "auth_info/**",
+    "node_modules/**",
+    ".kilo/**",
+    "docs/**",
+    "frontend/**",
+    "*.log",
+    "*.ndjson",
+    "*.lock"
+  ],
+  "ext": "js,json,mjs,cjs",
+  "delay": "500",
+  "verbose": false
+}
