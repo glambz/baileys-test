@@ -1,0 +1,144 @@
+{
+  "app": {
+    "title": "Baileys Studio",
+    "nav": {
+      "chats": "Chats",
+      "aiChat": "AI Chat"
+    }
+  },
+  "auth": {
+    "connected": "Connected",
+    "connecting": "Connecting",
+    "disconnected": "Disconnected",
+    "loading": "Loading status",
+    "error": "Status unavailable"
+  },
+  "chats": {
+    "sidebar": {
+      "title": "Conversations",
+      "empty": "No conversations yet",
+      "emptySubtitle": "There are no chats to display right now.",
+      "offline": "No connection - showing the last cached data.",
+      "refreshing": "Refreshing",
+      "errorTitle": "Cannot load conversations",
+      "retry": "Try again",
+      "unreadAria": "{n} unread messages",
+      "selectChat": "Pick a conversation to start",
+      "selectChatHint": "Use the sidebar on the left",
+      "threadHeader": "Conversation panel",
+      "menuLabel": "Conversation actions",
+      "viewContact": "View contact",
+      "archive": "Archive"
+    },
+    "thread": {
+      "empty": "No messages in this conversation yet.",
+      "loadOlder": "Load older messages…",
+      "composerPlaceholder": "Write a message…",
+      "send": "Send",
+      "sendAria": "Send",
+      "formAria": "Send message",
+      "errorEmpty": "Message cannot be empty",
+      "errorTooLong": "Message is too long",
+      "sendError": "Failed to send message",
+      "chatNotFound": "Chat not found",
+      "you": "You",
+      "sending": "sending…"
+    }
+  },
+  "ai": {
+    "page": {
+      "title": "Ask AI",
+      "subtitle": "Pick one of the examples below, or write your own question in the box below.",
+      "composerPlaceholder": "Ask AI…",
+      "submit": "Ask",
+      "submitAria": "Ask AI",
+      "formAria": "Send AI question",
+      "errorEmpty": "Question must be at least 3 characters",
+      "errorTooLong": "Question is too long",
+      "errorGeneral": "Failed to reach the AI service",
+      "thresholdLabel": "Confidence threshold: {value}",
+      "pendingSkeleton": "…"
+    },
+    "badge": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low",
+      "tooltipHigh": "High - answer comes from a clear source.",
+      "tooltipMedium": "Medium - answer is relevant but not identical.",
+      "tooltipLow": "Low - not confident; show the fallback."
+    },
+    "evidence": {
+      "label": "View sources ({n})"
+    },
+    "fallback": {
+      "message": "Sorry, we don't have data on that yet 🙏",
+      "suggestionTitle": "Maybe you meant:"
+    }
+  },
+  "theme": {
+    "label": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "intro": "Keyboard shortcuts available in this app.",
+    "focusSearch": "Focus search",
+    "clearComposer": "Clear composer",
+    "goChats": "Go to Chats page",
+    "goAiChat": "Go to AI Chat page",
+    "showHelp": "Show shortcut help",
+    "menuChats": "Switch to Chats menu",
+    "menuCrm": "Switch to CRM menu",
+    "menuAi": "Switch to AI menu",
+    "crmSearch": "Focus CRM data viewer search",
+    "crmNewRecord": "Open New Record form",
+    "crmUpload": "Focus Knowledge upload",
+    "groupMenus": "Menu navigation",
+    "groupCrm": "CRM actions"
+  },
+  "crm": {
+    "workspace": {
+      "title": "CRM Workspace",
+      "empty": "No entities yet. Click + New entity to start.",
+      "errorRetry": "Try again"
+    },
+    "schema": {
+      "title": "Schema Designer",
+      "empty": "No entities yet",
+      "fieldsHeader": "Fields",
+      "fieldLabel": "Label",
+      "fieldRequired": "Required",
+      "errorName": "Name must match ^[a-z][a-z0-9_]{0,63}$"
+    },
+    "data": {
+      "searchPlaceholder": "Search records...",
+      "empty": "No records yet. Click + New record to start.",
+      "newRecord": "New record",
+      "validationFailed": "Validation failed"
+    },
+    "knowledge": {
+      "title": "Knowledge",
+      "pending": "Queued",
+      "chunked": "Splitting",
+      "embedded": "Ready",
+      "failed": "Failed",
+      "deleteConfirm": "Delete the file and all of its chunks?",
+      "uploadConstraints": "PDF / Markdown / Text / CSV, max 25MB per file, 20 files per upload."
+    },
+    "ai": {
+      "toggleAi": "AI",
+      "toggleHuman": "Human",
+      "bannerHeld": "AI drafted an answer but the confidence is low",
+      "sendAsIs": "Send as-is",
+      "editAndSend": "Edit & send",
+      "discard": "Discard draft",
+      "testReply": "Test reply"
+    }
+  },
+  "notFound": {
+    "title": "Page not found",
+    "back": "Back to Chats"
+  }
+}

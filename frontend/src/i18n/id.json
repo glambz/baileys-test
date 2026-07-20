@@ -1,0 +1,144 @@
+{
+  "app": {
+    "title": "Baileys Studio",
+    "nav": {
+      "chats": "Chats",
+      "aiChat": "AI Chat"
+    }
+  },
+  "auth": {
+    "connected": "Terhubung",
+    "connecting": "Menghubungkan",
+    "disconnected": "Tidak terhubung",
+    "loading": "Memuat status",
+    "error": "Status tidak tersedia"
+  },
+  "chats": {
+    "sidebar": {
+      "title": "Daftar percakapan",
+      "empty": "Belum ada percakapan",
+      "emptySubtitle": "Saat ini belum ada chat yang bisa ditampilkan.",
+      "offline": "Tidak ada koneksi - menampilkan data terakhir yang di-cache.",
+      "refreshing": "Menyegarkan",
+      "errorTitle": "Tidak dapat memuat percakapan",
+      "retry": "Coba lagi",
+      "unreadAria": "{n} pesan belum dibaca",
+      "selectChat": "Pilih percakapan untuk mulai",
+      "selectChatHint": "Gunakan sidebar di sebelah kiri",
+      "threadHeader": "Panel percakapan",
+      "menuLabel": "Aksi percakapan",
+      "viewContact": "Lihat kontak",
+      "archive": "Arsipkan"
+    },
+    "thread": {
+      "empty": "Belum ada pesan di percakapan ini.",
+      "loadOlder": "Muat pesan lama…",
+      "composerPlaceholder": "Tulis pesan…",
+      "send": "Kirim",
+      "sendAria": "Kirim",
+      "formAria": "Kirim pesan",
+      "errorEmpty": "Pesan tidak boleh kosong",
+      "errorTooLong": "Pesan terlalu panjang",
+      "sendError": "Gagal mengirim pesan",
+      "chatNotFound": "Chat tidak ditemukan",
+      "you": "Anda",
+      "sending": "mengirim…"
+    }
+  },
+  "ai": {
+    "page": {
+      "title": "Tanya AI",
+      "subtitle": "Pilih salah satu contoh di bawah, atau tulis pertanyaan Anda sendiri di kolom bawah.",
+      "composerPlaceholder": "Tanya AI…",
+      "submit": "Tanya",
+      "submitAria": "Tanya AI",
+      "formAria": "Kirim pertanyaan AI",
+      "errorEmpty": "Pertanyaan minimal 3 karakter",
+      "errorTooLong": "Pertanyaan terlalu panjang",
+      "errorGeneral": "Gagal menghubungi layanan AI",
+      "thresholdLabel": "Ambang keyakinan: {value}",
+      "pendingSkeleton": "…"
+    },
+    "badge": {
+      "high": "Tinggi",
+      "medium": "Sedang",
+      "low": "Rendah",
+      "tooltipHigh": "Tinggi - jawaban diambil dari sumber yang jelas.",
+      "tooltipMedium": "Sedang - jawaban diambil dari sumber yang relevan tetapi tidak identik.",
+      "tooltipLow": "Rendah - tidak yakin; tampilkan fallback."
+    },
+    "evidence": {
+      "label": "Lihat sumber ({n})"
+    },
+    "fallback": {
+      "message": "Maaf kak, untuk hal itu belum ada di data kami ya 🙏",
+      "suggestionTitle": "Mungkin yang Anda maksud:"
+    }
+  },
+  "theme": {
+    "label": "Tema",
+    "light": "Terang",
+    "dark": "Gelap",
+    "system": "Sistem"
+  },
+  "shortcuts": {
+    "title": "Pintasan keyboard",
+    "intro": "Daftar pintasan keyboard yang tersedia di aplikasi ini.",
+    "focusSearch": "Fokus pencarian",
+    "clearComposer": "Kosongkan composer",
+    "goChats": "Buka halaman Chats",
+    "goAiChat": "Buka halaman AI Chat",
+    "showHelp": "Tampilkan bantuan pintasan",
+    "menuChats": "Buka menu Chats",
+    "menuCrm": "Buka menu CRM",
+    "menuAi": "Buka menu AI",
+    "crmSearch": "Fokus pencarian di CRM data viewer",
+    "crmNewRecord": "Buka form Record baru",
+    "crmUpload": "Fokus upload Knowledge",
+    "groupMenus": "Menu navigasi",
+    "groupCrm": "Aksi CRM"
+  },
+  "crm": {
+    "workspace": {
+      "title": "CRM Workspace",
+      "empty": "Belum ada entity. Klik + Entitas baru untuk mulai.",
+      "errorRetry": "Coba lagi"
+    },
+    "schema": {
+      "title": "Schema Designer",
+      "empty": "Belum ada entity",
+      "fieldsHeader": "Fields",
+      "fieldLabel": "Label",
+      "fieldRequired": "Wajib",
+      "errorName": "Nama harus ^[a-z][a-z0-9_]{0,63}$"
+    },
+    "data": {
+      "searchPlaceholder": "Cari record…",
+      "empty": "Belum ada record. Klik + Record baru untuk mulai.",
+      "newRecord": "Record baru",
+      "validationFailed": "Validasi gagal"
+    },
+    "knowledge": {
+      "title": "Knowledge",
+      "pending": "Menunggu",
+      "chunked": "Dipecah",
+      "embedded": "Siap",
+      "failed": "Gagal",
+      "deleteConfirm": "Hapus file dan semua chunk-nya?",
+      "uploadConstraints": "PDF / Markdown / Text / CSV, maks 25MB per file, 20 file per upload."
+    },
+    "ai": {
+      "toggleAi": "AI",
+      "toggleHuman": "Human",
+      "bannerHeld": "AI menyusun draf jawaban, tetapi tingkat keyakinannya rendah",
+      "sendAsIs": "Kirim apa adanya",
+      "editAndSend": "Edit & kirim",
+      "discard": "Buang draf",
+      "testReply": "Test reply"
+    }
+  },
+  "notFound": {
+    "title": "Page not found",
+    "back": "Kembali ke Chats"
+  }
+}
