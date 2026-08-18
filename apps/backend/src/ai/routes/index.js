@@ -6,10 +6,12 @@ const ai = require('./ai');
 const crm = require('./crm');
 const knowledge = require('./knowledge');
 const settings = require('./settings');
+const history = require('./history');
 
 function mountAiRoutes(app) {
   app.use('/api/crm/ai', ai);
   app.use('/api/crm/ai', settings);
+  app.use('/api/crm/ai', history);
   app.use('/api/crm', crm);
   app.use('/api/crm/knowledge', knowledge);
 
