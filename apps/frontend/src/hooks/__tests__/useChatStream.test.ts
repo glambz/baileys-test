@@ -67,21 +67,21 @@ describe('runChatStream', () => {
 
     const tools: string[] = [];
     const chunks: string[] = [];
-    let done: { answer: string } | null = null;
+    const dones: Array<{ answer: string; confidence: number }> = [];
 
     await runChatStream(
       { question: 'hi' },
       {
         onTool: (t) => tools.push(t.name),
         onChunk: (c) => chunks.push(c.delta),
-        onDone: (d) => { done = d; },
+        onDone: (d) => { dones.push(d as { answer: string; confidence: number }); },
       }
     );
     await new Promise((r) => setTimeout(r, 20));
 
     expect(tools).toEqual(['hybridRetrieval']);
     expect(chunks.join('')).toBe('Hello world');
-    expect(done?.answer).toBe('Hello world');
+    expect(dones[0]?.answer).toBe('Hello world');
   });
 
   it('emits error on error event', async () => {
@@ -91,10 +91,10 @@ describe('runChatStream', () => {
       ])
     ) as typeof fetch;
 
-    let err: { message: string } | null = null;
-    await runChatStream({ question: 'hi' }, { onError: (e) => { err = e; } });
+    const errs: Array<{ message: string }> = [];
+    await runChatStream({ question: 'hi' }, { onError: (e) => { errs.push(e as { message: string }); } });
     await new Promise((r) => setTimeout(r, 20));
-    expect(err?.message).toBe('boom');
+    expect(errs[0]?.message).toBe('boom');
   });
 
   it('aborts the in-flight request via the handle', async () => {
@@ -135,16 +135,16 @@ describe('runChatStream', () => {
 
   it('reports non-2xx responses as an error event', async () => {
     global.fetch = vi.fn(async () => new Response('oops', { status: 500 })) as typeof fetch;
-    let err: { message: string } | null = null;
-    await runChatStream({ question: 'hi' }, { onError: (e) => { err = e; } });
+    const errs: Array<{ message: string }> = [];
+    await runChatStream({ question: 'hi' }, { onError: (e) => { errs.push(e as { message: string }); } });
     await new Promise((r) => setTimeout(r, 10));
-    expect(err?.message).toBe('HTTP 500');
+    expect(errs[0]?.message).toBe('HTTP 500');
   });
 
   it('reports network errors as an error event', async () => {
     global.fetch = vi.fn(async () => { throw new Error('network down'); }) as typeof fetch;
-    let err: { message: string } | null = null;
-    await runChatStream({ question: 'hi' }, { onError: (e) => { err = e; } });
-    expect(err?.message).toBe('network down');
+    const errs: Array<{ message: string }> = [];
+    await runChatStream({ question: 'hi' }, { onError: (e) => { errs.push(e as { message: string }); } });
+    expect(errs[0]?.message).toBe('network down');
   });
 });
