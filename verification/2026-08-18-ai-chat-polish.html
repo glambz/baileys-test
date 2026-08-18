@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>In-App AI Chat Polish — Manual Verification</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { border-bottom: 2px solid #333; padding-bottom: 0.3rem; }
+  h2 { margin-top: 2rem; color: #2c5282; }
+  .scenario { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; background: #fafafa; }
+  .pass { color: #22863a; font-weight: bold; }
+  .fail { color: #cb2431; font-weight: bold; }
+  .step { margin: 0.5rem 0; }
+  .note { background: #fffbdd; border-left: 4px solid #d4ac0d; padding: 0.5rem 1rem; margin: 1rem 0; }
+  code { background: #f6f8fa; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 0.8rem; border-radius: 6px; overflow-x: auto; }
+  button { padding: 0.4rem 0.8rem; margin: 0.2rem; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.done { background: #22863a; color: white; border-color: #22863a; }
+  .result { margin-left: 0.5rem; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>In-App AI Chat Polish — Manual Verification</h1>
+<p>Spec: <code>docs/specs/2026-08-18-in-app-ai-chat-polish.md</code></p>
+<p>Date: 2026-08-18. Run after <code>pnpm db:migrate</code> (migration 011) is applied and both backend + frontend are running.</p>
+
+<div class="note">
+<strong>What to verify:</strong> streaming response, tool-call chips, server-backed history, copy/regenerate/cancel/export buttons.
+</div>
+
+<h2>Scenario 1: Streaming response</h2>
+<div class="scenario" id="s1">
+  <div class="step"><strong>Action:</strong> Open <code>/ai-workspace</code>. Ask a question in the composer.</div>
+  <div class="step"><strong>Expect:</strong> Answer text appears progressively (not all at once). Each token is appended as it streams.</div>
+  <div class="step"><strong>Verify:</strong> Open DevTools Network tab. The <code>POST /api/crm/ai/chat</code> request should be <code>text/event-stream</code> with multiple <code>event: chunk</code> frames.</div>
+  <button onclick="mark('s1','pass')">Pass</button><button onclick="mark('s1','fail')">Fail</button>
+  <span class="result" id="s1-r"></span>
+</div>
+
+<h2>Scenario 2: Tool-call chip</h2>
+<div class="scenario" id="s2">
+  <div class="step"><strong>Action:</strong> After a streaming answer, enable the "Tampilkan tool chips" checkbox (top-right).</div>
+  <div class="step"><strong>Expect:</strong> A "hybridRetrieval" chip appears above the answer with "0 result(s)" (or more if chat-A KB matches). Click the chip to expand and see the JSON input.</div>
+  <button onclick="mark('s2','pass')">Pass</button><button onclick="mark('s2','fail')">Fail</button>
+  <span class="result" id="s2-r"></span>
+</div>
+
+<h2>Scenario 3: Server-backed history</h2>
+<div class="scenario" id="s3">
+  <div class="step"><strong>Action:</strong> Ask 3 questions. Reload the page (Ctrl+R).</div>
+  <div class="step"><strong>Expect:</strong> The left sidebar shows the 3 questions in newest-first order. Clicking a row restores the question into the composer.</div>
+  <div class="step"><strong>Verify:</strong> <code>SELECT count(*) FROM ai_chat_history;</code> in psql returns 3 rows.</div>
+  <button onclick="mark('s3','pass')">Pass</button><button onclick="mark('s3','fail')">Fail</button>
+  <span class="result" id="s3-r"></span>
+</div>
+
+<h2>Scenario 4: Copy + Regenerate</h2>
+<div class="scenario" id="s4">
+  <div class="step"><strong>Action:</strong> After a streaming answer completes, click "Copy" then paste somewhere. Click "Regenerate" — the previous answer is replaced with a new stream.</div>
+  <div class="step"><strong>Expect:</strong> Copy puts the answer text on the clipboard. Regenerate re-asks the same question and shows new chips + answer.</div>
+  <button onclick="mark('s4','pass')">Pass</button><button onclick="mark('s4','fail')">Fail</button>
+  <span class="result" id="s4-r"></span>
+</div>
+
+<h2>Scenario 5: Cancel mid-stream</h2>
+<div class="scenario" id="s5">
+  <div class="step"><strong>Action:</strong> Ask a question. While the answer is still streaming, click "Cancel".</div>
+  <div class="step"><strong>Expect:</strong> The stream stops (partial answer remains in the UI). The composer becomes available again.</div>
+  <button onclick="mark('s5','pass')">Pass</button><button onclick="mark('s5','fail')">Fail</button>
+  <span class="result" id="s5-r"></span>
+</div>
+
+<h2>Scenario 6: Export to Markdown</h2>
+<div class="scenario" id="s6">
+  <div class="step"><strong>Action:</strong> After at least 2 questions, click "Export" (top-right). Paste into a markdown viewer.</div>
+  <div class="step"><strong>Expect:</strong> Both questions appear as <code>## headings</code> with their answers and confidence scores.</div>
+  <button onclick="mark('s6','pass')">Pass</button><button onclick="mark('s6','fail')">Fail</button>
+  <span class="result" id="s6-r"></span>
+</div>
+
+<h2>Done</h2>
+<p>All 6 scenarios pass = polish verified. Any failure = block release and investigate.</p>
+
+<script>
+function mark(id, verdict) {
+  const el = document.getElementById(id + '-r');
+  el.textContent = verdict === 'pass' ? '✓ PASS' : '✗ FAIL';
+  el.className = 'result ' + (verdict === 'pass' ? 'pass' : 'fail');
+  document.getElementById(id).querySelectorAll('button').forEach((b) => (b.disabled = true));
+}
+</script>
+</body>
+</html>
