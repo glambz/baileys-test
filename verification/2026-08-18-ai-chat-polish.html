@@ -4,10 +4,13 @@
 <meta charset="UTF-8">
 <title>In-App AI Chat Polish — Manual Verification</title>
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  body { font-family: -apple-system, sans-serif; max-width: 820px; margin: 2rem auto; padding: 0 1rem 6rem; color: #1a1a1a; }
   h1 { border-bottom: 2px solid #333; padding-bottom: 0.3rem; }
   h2 { margin-top: 2rem; color: #2c5282; }
   .scenario { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; background: #fafafa; }
+  .scenario.pass { border-color: #22863a; }
+  .scenario.fail { border-color: #cb2431; }
+  .scenario.untouched { border-color: #ccc; }
   .pass { color: #22863a; font-weight: bold; }
   .fail { color: #cb2431; font-weight: bold; }
   .step { margin: 0.5rem 0; }
@@ -15,8 +18,20 @@
   code { background: #f6f8fa; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
   pre { background: #f6f8fa; padding: 0.8rem; border-radius: 6px; overflow-x: auto; }
   button { padding: 0.4rem 0.8rem; margin: 0.2rem; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
-  button.done { background: #22863a; color: white; border-color: #22863a; }
-  .result { margin-left: 0.5rem; font-weight: bold; }
+  button.active.pass { background: #22863a; color: white; border-color: #22863a; }
+  button.active.fail { background: #cb2431; color: white; border-color: #cb2431; }
+  textarea { width: 100%; min-height: 60px; margin-top: 0.5rem; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-family: inherit; font-size: 13px; box-sizing: border-box; }
+  .verdict-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; }
+  #floating-copy {
+    position: fixed; bottom: 1rem; right: 1rem;
+    background: #2c5282; color: white;
+    padding: 0.75rem 1.25rem; border: none; border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    cursor: pointer; font-weight: bold;
+    z-index: 100;
+  }
+  #floating-copy:hover { background: #1e3a5f; }
+  #floating-copy.copied { background: #22863a; }
 </style>
 </head>
 <body>
@@ -33,16 +48,24 @@
   <div class="step"><strong>Action:</strong> Open <code>/ai-workspace</code>. Ask a question in the composer.</div>
   <div class="step"><strong>Expect:</strong> Answer text appears progressively (not all at once). Each token is appended as it streams.</div>
   <div class="step"><strong>Verify:</strong> Open DevTools Network tab. The <code>POST /api/crm/ai/chat</code> request should be <code>text/event-stream</code> with multiple <code>event: chunk</code> frames.</div>
-  <button onclick="mark('s1','pass')">Pass</button><button onclick="mark('s1','fail')">Fail</button>
-  <span class="result" id="s1-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s1','pass')">Pass</button>
+    <button onclick="setVerdict('s1','fail')">Fail</button>
+    <span id="s1-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s1-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Scenario 2: Tool-call chip</h2>
 <div class="scenario" id="s2">
   <div class="step"><strong>Action:</strong> After a streaming answer, enable the "Tampilkan tool chips" checkbox (top-right).</div>
   <div class="step"><strong>Expect:</strong> A "hybridRetrieval" chip appears above the answer with "0 result(s)" (or more if chat-A KB matches). Click the chip to expand and see the JSON input.</div>
-  <button onclick="mark('s2','pass')">Pass</button><button onclick="mark('s2','fail')">Fail</button>
-  <span class="result" id="s2-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s2','pass')">Pass</button>
+    <button onclick="setVerdict('s2','fail')">Fail</button>
+    <span id="s2-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s2-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Scenario 3: Server-backed history</h2>
@@ -50,43 +73,103 @@
   <div class="step"><strong>Action:</strong> Ask 3 questions. Reload the page (Ctrl+R).</div>
   <div class="step"><strong>Expect:</strong> The left sidebar shows the 3 questions in newest-first order. Clicking a row restores the question into the composer.</div>
   <div class="step"><strong>Verify:</strong> <code>SELECT count(*) FROM ai_chat_history;</code> in psql returns 3 rows.</div>
-  <button onclick="mark('s3','pass')">Pass</button><button onclick="mark('s3','fail')">Fail</button>
-  <span class="result" id="s3-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s3','pass')">Pass</button>
+    <button onclick="setVerdict('s3','fail')">Fail</button>
+    <span id="s3-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s3-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Scenario 4: Copy + Regenerate</h2>
 <div class="scenario" id="s4">
   <div class="step"><strong>Action:</strong> After a streaming answer completes, click "Copy" then paste somewhere. Click "Regenerate" — the previous answer is replaced with a new stream.</div>
   <div class="step"><strong>Expect:</strong> Copy puts the answer text on the clipboard. Regenerate re-asks the same question and shows new chips + answer.</div>
-  <button onclick="mark('s4','pass')">Pass</button><button onclick="mark('s4','fail')">Fail</button>
-  <span class="result" id="s4-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s4','pass')">Pass</button>
+    <button onclick="setVerdict('s4','fail')">Fail</button>
+    <span id="s4-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s4-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Scenario 5: Cancel mid-stream</h2>
 <div class="scenario" id="s5">
   <div class="step"><strong>Action:</strong> Ask a question. While the answer is still streaming, click "Cancel".</div>
   <div class="step"><strong>Expect:</strong> The stream stops (partial answer remains in the UI). The composer becomes available again.</div>
-  <button onclick="mark('s5','pass')">Pass</button><button onclick="mark('s5','fail')">Fail</button>
-  <span class="result" id="s5-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s5','pass')">Pass</button>
+    <button onclick="setVerdict('s5','fail')">Fail</button>
+    <span id="s5-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s5-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Scenario 6: Export to Markdown</h2>
 <div class="scenario" id="s6">
   <div class="step"><strong>Action:</strong> After at least 2 questions, click "Export" (top-right). Paste into a markdown viewer.</div>
   <div class="step"><strong>Expect:</strong> Both questions appear as <code>## headings</code> with their answers and confidence scores.</div>
-  <button onclick="mark('s6','pass')">Pass</button><button onclick="mark('s6','fail')">Fail</button>
-  <span class="result" id="s6-r"></span>
+  <div class="verdict-row">
+    <button onclick="setVerdict('s6','pass')">Pass</button>
+    <button onclick="setVerdict('s6','fail')">Fail</button>
+    <span id="s6-tag" class="untouched">(unmarked)</span>
+  </div>
+  <textarea id="s6-notes" placeholder="Notes — what passed/failed, evidence, repro steps..."></textarea>
 </div>
 
 <h2>Done</h2>
 <p>All 6 scenarios pass = polish verified. Any failure = block release and investigate.</p>
 
+<button id="floating-copy" onclick="copyReport()">Copy report</button>
+
 <script>
-function mark(id, verdict) {
-  const el = document.getElementById(id + '-r');
-  el.textContent = verdict === 'pass' ? '✓ PASS' : '✗ FAIL';
-  el.className = 'result ' + (verdict === 'pass' ? 'pass' : 'fail');
-  document.getElementById(id).querySelectorAll('button').forEach((b) => (b.disabled = true));
+const SCENARIOS = [
+  { id: 's1', label: 'Scenario 1 (Streaming response)' },
+  { id: 's2', label: 'Scenario 2 (Tool-call chip)' },
+  { id: 's3', label: 'Scenario 3 (Server-backed history)' },
+  { id: 's4', label: 'Scenario 4 (Copy + Regenerate)' },
+  { id: 's5', label: 'Scenario 5 (Cancel mid-stream)' },
+  { id: 's6', label: 'Scenario 6 (Export to Markdown)' },
+];
+
+const verdicts = {};
+SCENARIOS.forEach((s) => { verdicts[s.id] = null; });
+
+function setVerdict(id, v) {
+  verdicts[id] = v;
+  const sc = document.getElementById(id);
+  const tag = document.getElementById(id + '-tag');
+  sc.classList.remove('pass', 'fail', 'untouched');
+  sc.classList.add(v === 'pass' ? 'pass' : 'fail');
+  tag.classList.remove('untouched');
+  tag.classList.add(v === 'pass' ? 'pass' : 'fail');
+  tag.textContent = v === 'pass' ? '✓ PASS' : '✗ FAIL';
+  sc.querySelectorAll('button').forEach((b) => {
+    const isMatch = (b.textContent.toLowerCase() === v);
+    b.classList.toggle('active', isMatch);
+  });
+}
+
+function copyReport() {
+  const lines = [`# In-App AI Chat Polish Verification Report`, `Date: ${new Date().toISOString()}`, ''];
+  for (const s of SCENARIOS) {
+    const v = verdicts[s.id] ?? 'unmarked';
+    const notes = document.getElementById(s.id + '-notes').value.trim();
+    lines.push(`${s.label}: ${v.toUpperCase()}`);
+    if (notes) lines.push(`  Notes: ${notes}`);
+    lines.push('');
+  }
+  const text = lines.join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('floating-copy');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.classList.remove('copied');
+    }, 1500);
+  });
 }
 </script>
 </body>
