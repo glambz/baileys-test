@@ -57,7 +57,7 @@ function attachSse(res, opts = {}) {
   // If the client disconnects, mark ended so subsequent sends are no-ops.
   res.on?.('close', () => { end(); });
 
-  return { send, end };
+  return { send, end, get ended() { return ended; } };
 }
 
 module.exports = { attachSse };

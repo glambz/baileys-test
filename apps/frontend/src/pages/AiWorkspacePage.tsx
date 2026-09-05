@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { MessageSquare, ExternalLink, Settings, Copy, RefreshCw, Download, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { TeamAiComposer } from '@/components/ai/TeamAiComposer';
@@ -131,7 +133,7 @@ export default function AiWorkspacePage() {
                 kind: d.kind,
                 evidence: d.evidence ?? [],
               });
-            } catch (_) {
+            } catch {
               // History persistence is best-effort; the answer is still shown.
             }
           },
@@ -179,8 +181,11 @@ export default function AiWorkspacePage() {
   // Derive TranscriptItem list from pending (so evidence bubbles reuse the
   // existing Transcript component).
   return (
-    <div className="flex h-full flex-col md:flex-row">
-      <aside className="hidden w-80 shrink-0 flex-col border-r md:flex">
+    <div className="flex h-full flex-col lg:flex-row">
+      {/* Reveals at lg, not md: the app shell already renders the rail
+          and the chat list, so a third column at 768px pushed the main
+          pane off-screen. */}
+      <aside className="hidden w-80 shrink-0 flex-col border-r lg:flex">
         <div className="border-b p-3">
           <h2 className="font-medium">Riwayat pertanyaan</h2>
           <p className="text-xs text-muted-foreground">
@@ -229,22 +234,32 @@ export default function AiWorkspacePage() {
         </div>
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between gap-2 border-b p-3">
-          <div>
-            <h1 className="text-base font-semibold">AI Workspace</h1>
-            <p className="text-xs text-muted-foreground">
+        {/* The title column needs min-w-0 and the action cluster needs
+            shrink-0, otherwise flex lets the buttons hold their intrinsic
+            width and crush the heading into a two-word-per-line column. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b p-3">
+          {/* A floor on the title width makes the flex container wrap the
+              action cluster onto its own row rather than truncating the
+              heading to "AI Wor..." - the two sidebars leave this pane
+              narrow even on a wide viewport, so viewport breakpoints
+              alone do not describe the space available here. */}
+          <div className="min-w-[11rem] flex-1">
+            <h1 className="truncate text-base font-semibold">AI Workspace</h1>
+            <p className="truncate text-xs text-muted-foreground">
               Scope: tim internal - semua entity CRM terlihat.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
+          <div className="flex shrink-0 items-center gap-1.5">
+            <div className="mr-1 flex items-center gap-2">
+              <Switch
+                id="show-tool-chips"
                 checked={showSources}
-                onChange={(e) => setShowSources(e.target.checked)}
+                onCheckedChange={setShowSources}
               />
-              <span>Tampilkan tool chips</span>
-            </label>
+              <Label htmlFor="show-tool-chips" className="whitespace-nowrap text-xs font-normal">
+                Tool chips
+              </Label>
+            </div>
             <Button
               size="sm"
               variant="outline"
@@ -252,14 +267,17 @@ export default function AiWorkspacePage() {
               disabled={pending.length === 0}
               aria-label="Export transcript to markdown"
             >
-              <Download className="mr-1 h-4 w-4" /> Export
+              <Download className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">Export</span>
             </Button>
             <Button size="sm" variant="outline" onClick={openFirstChat}>
-              <MessageSquare className="mr-1 h-4 w-4" /> Buka chat contoh
-              <ExternalLink className="ml-1 h-3 w-3" />
+              <MessageSquare className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">Buka chat contoh</span>
+              <ExternalLink className="ml-1 hidden h-3 w-3 sm:inline" />
             </Button>
             <Button size="sm" variant="ghost" onClick={onOpenAiSettings} aria-label="Atur AI">
-              <Settings className="mr-1 h-4 w-4" /> Atur AI
+              <Settings className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">Atur AI</span>
             </Button>
           </div>
         </div>

@@ -12,9 +12,11 @@ import express from 'express';
 const HAS_DB = !!process.env.DATABASE_URL;
 
 async function startServer() {
-  const { streamChatHandler, setLlmForTesting } = await import('../src/controllers/ai/streamChat.js');
-  // Inject a stub LLM so the test doesn't hit the real provider.
-  setLlmForTesting({
+  // Use createRequire so we patch the SAME module instance the route uses.
+  const { createRequire } = await import('node:module');
+  const requireFromTest = createRequire(import.meta.url);
+  const streamChat = requireFromTest('../src/controllers/ai/streamChat.js');
+  streamChat.setLlmForTesting({
     createChatCompletion: async () => ({ content: 'Hello world. This is a streamed answer.' }),
     buildUserPrompt: ({ question }) => question,
     parseStructuredOutput: async ({ rawText }) => ({
@@ -24,7 +26,7 @@ async function startServer() {
   });
   const app = express();
   app.use(express.json());
-  app.post('/api/ai/chat', streamChatHandler);
+  app.post('/api/ai/chat', streamChat.streamChatHandler);
   return new Promise((resolve) => {
     const server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => {

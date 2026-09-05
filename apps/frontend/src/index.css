@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Design tokens.
+ *
+ * The palette is built on one brand hue (152, a deep green) so light and
+ * dark share an identity — previously `--primary` was near-black in light
+ * mode and green in dark, which read as two different products.
+ *
+ * Neutrals carry a slight green cast (hue 152, very low saturation) rather
+ * than being pure grey, so surfaces sit with the brand instead of beside it.
+ *
+ * Status tokens (success / warning / info) exist because the operator UI
+ * needs to distinguish "AI handled it", "needs a human", and "informational"
+ * — states that were previously spelled with hardcoded Tailwind palette
+ * classes (sky-50, rose-200, slate-700) that ignored the theme entirely and
+ * were invisible in dark mode.
+ */
+@layer base {
+  :root {
+    --background: 152 20% 99%;
+    --foreground: 152 12% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 152 12% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 152 12% 11%;
+    --primary: 152 47% 30%;
+    --primary-foreground: 152 40% 98%;
+    --secondary: 152 14% 95%;
+    --secondary-foreground: 152 20% 20%;
+    --muted: 152 14% 95.5%;
+    --muted-foreground: 152 8% 42%;
+    --accent: 152 22% 93%;
+    --accent-foreground: 152 30% 22%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 152 12% 89%;
+    --input: 152 12% 87%;
+    --ring: 152 47% 30%;
+
+    /* Raised panel above --background, distinct from --card. */
+    --surface: 152 16% 97%;
+    --surface-foreground: 152 12% 11%;
+
+    --success: 152 52% 32%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 90% 40%;
+    --warning-foreground: 0 0% 100%;
+    --info: 209 75% 40%;
+    --info-foreground: 0 0% 100%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 152 14% 7%;
+    --foreground: 152 10% 96%;
+    --card: 152 13% 10%;
+    --card-foreground: 152 10% 96%;
+    --popover: 152 13% 10%;
+    --popover-foreground: 152 10% 96%;
+    --primary: 152 55% 48%;
+    --primary-foreground: 152 30% 8%;
+    --secondary: 152 10% 17%;
+    --secondary-foreground: 152 10% 96%;
+    --muted: 152 10% 16%;
+    --muted-foreground: 152 7% 64%;
+    --accent: 152 14% 20%;
+    --accent-foreground: 152 10% 96%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 152 9% 20%;
+    --input: 152 9% 24%;
+    --ring: 152 55% 48%;
+
+    --surface: 152 12% 13%;
+    --surface-foreground: 152 10% 96%;
+
+    /* Lifted and desaturated for dark surfaces so they stay legible
+       against a dark ground while keeping the same semantic meaning. */
+    --success: 152 50% 52%;
+    --success-foreground: 152 30% 8%;
+    --warning: 36 85% 58%;
+    --warning-foreground: 36 40% 10%;
+    --info: 209 70% 62%;
+    --info-foreground: 209 40% 10%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+  html,
+  body,
+  #root {
+    min-height: 100vh;
+  }
+}
