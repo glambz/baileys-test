@@ -22,6 +22,7 @@ const { z } = require('zod');
 const { getPool } = require('../../db/client');
 const { loadChatMode, ChatNotFoundError } = require('../../ai/whatsapp/handoff');
 const { loadChatSummary } = require('../../ai/settings/summary');
+const { loadEscalationBriefing } = require('../../ai/settings/escalation');
 const audit = require('../../ai/audit/log');
 
 const QuerySchema = z.object({
@@ -153,16 +154,27 @@ async function handler(req, res, next) {
     const flagReason = deriveFlagReason(auditRow);
     const flagReasonLabel = FLAG_REASON_LABELS[flagReason] || 'Chat ditandai untuk dijawab manusia';
 
+    // Escalation briefing (spec 2026-09-04 Gap B). Generated at the moment
+    // of escalation, unlike conversationSummary which is a running digest
+    // refreshed at most once per 10 minutes and can be empty or stale here.
+    // `escalationReason` is authoritative when present: it is written in the
+    // same transaction as the handoff, whereas flagReason is reconstructed
+    // by scanning the audit NDJSON and can miss rows older than 7 days.
+    const esc = await loadEscalationBriefing(chatId);
+
     return res.json({
       chatId,
       aiMode: mode,
       phone,
       lastMessageAt,
-      flagReason,
-      flagReasonLabel,
+      flagReason: (esc && esc.reason) || flagReason,
+      flagReasonLabel: FLAG_REASON_LABELS[(esc && esc.reason) || flagReason] || flagReasonLabel,
       conversationSummary: summaryText,
       summaryUpdatedAt,
       lastMessages,
+      escalationBriefing: (esc && esc.briefing) || null,
+      escalationReason: (esc && esc.reason) || null,
+      escalationAt: (esc && esc.at) || 0,
     });
   } catch (err) {
     return next(err);

@@ -3,8 +3,8 @@
  * Hybrid retrieval: BM25 + ANN (RRF) + rerank + contact-scope filter + turbo cutoff.
  * Source: docs/crm/plans/19-retrieval-pipeline.md step 4.
  */
-const { bm25Search } = require('./bm25');
-const { annSearch } = require('./ann');
+const { bm25Search, bm25SearchRecords } = require('./bm25');
+const { annSearch, annSearchRecords } = require('./ann');
 const { rerank } = require('./reranker');
 const { embedText } = require('../llm/embed');
 const { getPool } = require('../../db/client');
@@ -40,12 +40,35 @@ async function hybridRetrieval(opts) {
   const bm25Hits = await bm25Search({ query, limit: 20, chatJid: chatJidFilter });
   // 2. ANN top 20.
   let annHits = [];
+  let qEmb = null;
   try {
-    const qEmb = opts.queryEmbedding || (await embedText(query));
+    qEmb = opts.queryEmbedding || (await embedText(query));
     annHits = await annSearch({ queryEmbedding: qEmb, limit: 20, chatJid: chatJidFilter });
   } catch (err) {
     // Embedding service unavailable — fall back to BM25 only.
     annHits = [];
+  }
+
+  // 2b. CRM record branches (spec 2026-09-04 Gap A). Records live in their
+  // own table but are fused into the same RRF below, so a record answer
+  // competes with a KB answer on equal footing. Both branches are
+  // best-effort: a missing record_embeddings table (migration not yet run)
+  // or an embedding failure degrades to KB-only retrieval rather than
+  // failing the whole request.
+  let recordBm25Hits = [];
+  let recordAnnHits = [];
+  const recordTenantId = opts.tenantId || null;
+  try {
+    recordBm25Hits = await bm25SearchRecords({ query, limit: 20, tenantId: recordTenantId });
+  } catch (_) {
+    recordBm25Hits = [];
+  }
+  if (qEmb) {
+    try {
+      recordAnnHits = await annSearchRecords({ queryEmbedding: qEmb, limit: 20, tenantId: recordTenantId });
+    } catch (_) {
+      recordAnnHits = [];
+    }
   }
 
   // 3. RRF merge.
@@ -55,10 +78,14 @@ async function hybridRetrieval(opts) {
   }
   bm25Hits.forEach((h, i) => add(h.chunk.id, 1 / (RRF_K + i + 1)));
   annHits.forEach((h, i) => add(h.chunk.id, 1 / (RRF_K + i + 1)));
+  recordBm25Hits.forEach((h, i) => add(h.chunk.id, 1 / (RRF_K + i + 1)));
+  recordAnnHits.forEach((h, i) => add(h.chunk.id, 1 / (RRF_K + i + 1)));
 
   const allChunks = new Map();
   for (const h of bm25Hits) allChunks.set(h.chunk.id, { chunk: h.chunk, score: h.score });
   for (const h of annHits) allChunks.set(h.chunk.id, { chunk: h.chunk, score: h.score });
+  for (const h of recordBm25Hits) allChunks.set(h.chunk.id, { chunk: h.chunk, score: h.score });
+  for (const h of recordAnnHits) allChunks.set(h.chunk.id, { chunk: h.chunk, score: h.score });
 
   const mergedIds = Array.from(scores.entries())
     .sort((a, b) => b[1] - a[1])
@@ -96,7 +123,10 @@ async function hybridRetrieval(opts) {
   }
 
   const rerankScore = reranked.length > 0 ? Math.max(...reranked.map((r) => r.score)) : 0;
-  const bm25Max = bm25Hits.length > 0 ? Math.max(...bm25Hits.map((h) => h.score || 0)) : 0;
+  // Record BM25 hits count toward the turbo cutoff too, so a question the
+  // CRM can answer but the document KB cannot still clears TAU_TURBO.
+  const keywordHits = bm25Hits.concat(recordBm25Hits);
+  const bm25Max = keywordHits.length > 0 ? Math.max(...keywordHits.map((h) => h.score || 0)) : 0;
   const retrievalScore = Math.max(bm25Max, rerankScore);
 
   // 6. Turbo cutoff.

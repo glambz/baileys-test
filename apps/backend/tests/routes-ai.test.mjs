@@ -43,7 +43,11 @@ describe('REST /api/crm/entities (list)', () => {
     const r = await request(app).get('/api/crm/entities');
     expect([200, 500]).toContain(r.status);
     if (r.status === 200) {
-      expect(Array.isArray(r.body)).toBe(true);
+      // The route returns an `{ entities: [...] }` envelope, not a bare
+      // array — that is the shape the FE's useEntities() parses. This
+      // assertion previously read `Array.isArray(r.body)` and only passed
+      // while the endpoint was erroring with a 500 and skipping the branch.
+      expect(Array.isArray(r.body.entities)).toBe(true);
     }
   });
 });

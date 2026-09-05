@@ -149,7 +149,11 @@ async function rawEmbed(text, client, model, dims, maxRetries) {
 async function embedText(text, opts) {
   opts = opts || {};
   const model = opts.model || process.env.EMBEDDING_MODEL || 'MiniMax-embed';
-  const dims = opts.dims || Number(process.env.EMBEDDING_DIM || 1536);
+  // Default matches the schema (migration 004 moved every vector column to
+  // VECTOR(1024) for bge-m3). The old 1536 default was a leftover from the
+  // OpenAI-embeddings era and made a missing EMBEDDING_DIM fail closed with a
+  // confusing dim-mismatch error instead of just working.
+  const dims = opts.dims || Number(process.env.EMBEDDING_DIM || 1024);
   const maxRetries = opts.maxRetries != null ? opts.maxRetries : 2;
   if (typeof text !== 'string' || text.length === 0) {
     throw new Error('embedText: text is required');

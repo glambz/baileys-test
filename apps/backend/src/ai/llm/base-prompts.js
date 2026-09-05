@@ -50,13 +50,15 @@ Anda HARUS membalas hanya dengan JSON valid (tanpa teks lain di luar JSON), deng
   "answer": string,
   "citations": number[],
   "confidence": number,
-  "fallback_used": boolean
+  "fallback_used": boolean,
+  "reasoning": string
 }
 
 - \`answer\`: teks jawaban dalam bahasa yang sesuai.
 - \`citations\`: array nomor [n] yang mendukung jawaban (kosongkan [] jika fallback).
 - \`confidence\`: nilai 0.0–1.0 (tingkat keyakinan Anda terhadap jawaban).
 - \`fallback_used\`: true jika jawaban adalah kalimat fallback.
+- \`reasoning\`: 1-2 kalimat menjelaskan DASAR confidence Anda — potongan CONTEXT mana yang Anda pakai, dan apa yang kurang kalau confidence rendah. Ini dibaca oleh agent manusia saat chat dialihkan, bukan oleh pelanggan.
 
 # Fallback
 Jika blok CONTEXT tidak cukup untuk menjawab dengan confidence >= 0.7, balas TEPAT dengan kalimat berikut (tanpa modifikasi apa pun):
@@ -110,13 +112,15 @@ You MUST reply only with valid JSON (no other text outside the JSON), with this 
   "answer": string,
   "citations": number[],
   "confidence": number,
-  "fallback_used": boolean
+  "fallback_used": boolean,
+  "reasoning": string
 }
 
 - \`answer\`: the answer text in the matching language.
 - \`citations\`: array of [n] numbers supporting the answer (empty [] for fallback).
 - \`confidence\`: 0.0–1.0 (your confidence in the answer).
 - \`fallback_used\`: true if the answer is the fallback sentence.
+- \`reasoning\`: 1-2 sentences explaining the BASIS for your confidence — which CONTEXT chunks you used, and what was missing if confidence is low. A human agent reads this on handoff; the customer never sees it.
 
 # Fallback
 If the CONTEXT block is insufficient to answer with confidence >= 0.7, reply EXACTLY with the following sentence (no modifications):

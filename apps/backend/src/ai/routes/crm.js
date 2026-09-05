@@ -7,6 +7,8 @@ const { z } = require('zod');
 const { nanoid } = require('nanoid');
 const { getPool } = require('../../db/client');
 const { requireTenant } = require('./_middleware');
+const records = require('../store/records');
+const logger = require('../../utils/logger');
 
 const router = express.Router();
 router.use(requireTenant);
@@ -179,7 +181,11 @@ router.post('/entities/:id/records', async (req, res, next) => {
        VALUES ($1, $2, $3, $4, $5::jsonb)`,
       [id, req.tenantId, req.params.id, contactId || null, JSON.stringify(data)]
     );
-    return res.status(201).json({ id, entityId: req.params.id, contactId, data });
+    // Sync the vector index (spec 2026-09-04 Gap A). Awaited, not
+    // fire-and-forget: a silent indexing failure would leave the record
+    // permanently invisible to RAG with nothing to signal it.
+    const indexed = await syncRecordIndex(id, req.tenantId, req.params.id, data);
+    return res.status(201).json({ id, entityId: req.params.id, contactId, data, indexed });
   } catch (err) {
     next(err);
   }
@@ -202,7 +208,19 @@ router.patch('/records/:id', async (req, res, next) => {
       `UPDATE entity_records SET ${fields.join(', ')} WHERE id = $${i}`,
       params
     );
-    return res.json({ ok: true });
+    // Re-index from the stored row rather than the patch body: a PATCH may
+    // carry only some fields, and the index must reflect the whole record.
+    const cur = await pool.query(
+      'SELECT entity_id, tenant_id, data FROM entity_records WHERE id = $1',
+      [req.params.id]
+    );
+    let indexed = null;
+    if (cur.rows.length > 0) {
+      indexed = await syncRecordIndex(
+        req.params.id, cur.rows[0].tenant_id, cur.rows[0].entity_id, cur.rows[0].data
+      );
+    }
+    return res.json({ ok: true, indexed });
   } catch (err) {
     next(err);
   }
@@ -218,5 +236,45 @@ router.delete('/records/:id', async (req, res, next) => {
     next(err);
   }
 });
+
+/**
+ * Re-index one record into record_embeddings.
+ * Source: docs/superpowers/specs/2026-09-04-wa-crm-gap-closure-design.md (Gap A)
+ *
+ * DELETE needs no counterpart: record_embeddings.record_id is a FK with
+ * ON DELETE CASCADE, so removing the record removes its vectors.
+ *
+ * Returns { chunks } on success, or { error } when indexing fails. The
+ * write itself already succeeded at this point, so a failure here is
+ * reported to the caller rather than thrown — the record exists and the
+ * operator needs to know it is not searchable yet.
+ */
+async function syncRecordIndex(recordId, tenantId, entityId, data) {
+  try {
+    const entity = await records.loadEntityForRecord(recordId);
+    const r = await records.indexRecord({
+      recordId,
+      entityId,
+      tenantId,
+      data,
+      schemaJson: entity && entity.schemaJson,
+      entityLabel: entity && entity.label,
+    });
+    return { chunks: r.chunks, searchable: r.chunks > 0 };
+  } catch (err) {
+    // indexRecord has already dropped any stale chunks for this record, so
+    // the index is consistent-but-empty rather than wrong. The row itself is
+    // committed, so this is not a request failure — but it is not nothing
+    // either: the record is invisible to RAG until the next successful write.
+    // Log it server-side so it is not discoverable only by reading a JSON
+    // field, and tell the caller plainly via `searchable: false`.
+    const message = String(err && err.message ? err.message : err).slice(0, 300);
+    logger.warn(
+      { recordId, entityId, tenantId, err: message },
+      'record saved but vector indexing failed — record is not searchable until re-saved'
+    );
+    return { error: message, searchable: false };
+  }
+}
 
 module.exports = router;

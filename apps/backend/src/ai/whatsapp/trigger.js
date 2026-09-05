@@ -42,6 +42,7 @@ const audit = require('../audit/log');
 const inbox = require('../../inbox/writer');
 const episodic = require('../store/episodic');
 const summaryStore = require('../settings/summary');
+const escalationStore = require('../settings/escalation');
 const { startTyping } = require('../../whatsapp/typing');
 
 const EPISODIC_TOPK = Number(process.env.EPISODIC_TOPK || 10);
@@ -218,6 +219,13 @@ async function processInboundMessage(inboundMsg, ctx) {
   // citing a price that exists in the KB but didn't make the top-5
   // gets flagged as hallucination. Single-row, ~2 KB total, fast.
   // (knowledge_chunks is single-tenant in MVP — no tenant_id filter.)
+  //
+  // CRM records count as grounding too (spec 2026-09-04 Gap A): now that
+  // entity_records are indexed, a number the LLM legitimately took from a
+  // record (an invoice amount, a quantity) must not be treated as a
+  // hallucination and suppress the reply. The record_embeddings read is
+  // guarded separately so a missing table (migration not yet run) still
+  // leaves the KB grounding intact.
   let allKbText = '';
   try {
     const pool = require('../../db/client').getPool();
@@ -227,14 +235,50 @@ async function processInboundMessage(inboundMsg, ctx) {
     // DB unavailable — fall through; the check below will use only the
     // retrieved chunks, which is no worse than before.
   }
+  try {
+    const pool = require('../../db/client').getPool();
+    const r = await pool.query('SELECT text FROM record_embeddings');
+    allKbText += '\n' + r.rows.map((row) => row.text || '').join('\n');
+  } catch (_) {
+    // record_embeddings absent — KB-only grounding, same as before Gap A.
+  }
+
+  // Single escalation path (spec 2026-09-04 Gap B). Every hold reason -
+  // turbo_cutoff, parse_failure, confidence_low, fallback_handoff,
+  // ungrounded_number - routes through here, so the agent briefing is
+  // generated in exactly one place and a future sixth reason gets it for
+  // free. The briefing is awaited, not fire-and-forget: the operator is
+  // alerted by the mode change and must not beat the context to the UI.
+  async function escalate(reason, auditExtra, escOpts) {
+    escOpts = escOpts || {};
+    try {
+      await transitionChatMode(chatId, 'ai', 'human_pending_flag', reason);
+    } catch (_) {}
+    await audit0.write(escOpts.auditEvent || 'auto_reply_hold', Object.assign(
+      { chatId, tenantId, reason },
+      auditExtra || {}
+    ));
+    try {
+      await escalationStore.generateEscalationBriefing({
+        chatId,
+        tenantId,
+        reason,
+        reasoning: escOpts.reasoning || null,
+        confidence: escOpts.confidence != null ? escOpts.confidence : null,
+        retrievedChunks: chunks,
+        currentMessage: body,
+      });
+    } catch (_) {
+      // generateEscalationBriefing swallows its own failures and stores a
+      // degraded briefing; this guard is belt-and-braces so a handoff can
+      // never be blocked by briefing generation.
+    }
+    return { decision: 'hold', reason };
+  }
 
   // Step 5: turbo cutoff.
   if (retrievalScore < TAU_TURBO) {
-    try {
-      await transitionChatMode(chatId, 'ai', 'human_pending_flag', 'turbo_cutoff');
-    } catch (_) {}
-    await audit0.write('auto_reply_hold', { chatId, tenantId, reason: 'turbo_cutoff', retrievalScore });
-    return { decision: 'hold', reason: 'turbo_cutoff' };
+    return escalate('turbo_cutoff', { retrievalScore });
   }
 
   // Step 6: build user prompt.
@@ -306,11 +350,7 @@ async function processInboundMessage(inboundMsg, ctx) {
     parsed = parsedR.parsed;
   } catch (err) {
     stopTyping();
-    try {
-      await transitionChatMode(chatId, 'ai', 'human_pending_flag', 'parse_failure');
-    } catch (_) {}
-    await audit0.write('auto_reply_hold', { chatId, tenantId, reason: 'parse_failure', error: String(err.message) });
-    return { decision: 'hold', reason: 'parse_failure' };
+    return escalate('parse_failure', { error: String(err.message) });
   }
 
   // Step 8.5: fallback augmentation.
@@ -334,16 +374,11 @@ async function processInboundMessage(inboundMsg, ctx) {
     // confidence — that is the case where the answer is questionable.
     const confThresh = settings.whatsappAutoReply.confidenceThreshold;
     if (!parsed.fallback_used && parsed.confidence < confThresh) {
-      try {
-        await transitionChatMode(chatId, 'ai', 'human_pending_flag', 'confidence_low');
-      } catch (_) {}
-      await audit0.write('auto_reply_hold', {
-        chatId,
-        tenantId,
-        reason: 'confidence_low',
-        confidence: parsed.confidence,
-      });
-      return { decision: 'hold', reason: 'confidence_low' };
+      return escalate(
+        'confidence_low',
+        { confidence: parsed.confidence },
+        { confidence: parsed.confidence, reasoning: parsed.reasoning }
+      );
     }
 
     // Step 9b: fallback handoff (BUGFIX answer-policy-2026-07-15).
@@ -355,16 +390,13 @@ async function processInboundMessage(inboundMsg, ctx) {
     // do NOT block the send, we just flip the chat mode + write the
     // handoff audit row.
     if (parsed.fallback_used) {
-      try {
-        await transitionChatMode(chatId, 'ai', 'human_pending_flag', 'fallback_handoff');
-      } catch (_) {}
-      await audit0.write('auto_reply_handoff', {
-        chatId,
-        tenantId,
-        reason: 'fallback_handoff',
-        confidence: parsed.confidence,
-        fallback_used: parsed.fallback_used,
-      });
+      // Return value deliberately ignored - the locked fallback phrase is
+      // still sent to the contact below.
+      await escalate(
+        'fallback_handoff',
+        { confidence: parsed.confidence, fallback_used: parsed.fallback_used },
+        { auditEvent: 'auto_reply_handoff', confidence: parsed.confidence, reasoning: parsed.reasoning }
+      );
     }
 
     // Step 10: citation grounding (skipped for MVP unless we have embeddings).
@@ -378,11 +410,11 @@ async function processInboundMessage(inboundMsg, ctx) {
       const inRetrieved = chunks.some((c) => (c.chunk.text || '').includes(n));
       const inKb = allKbText.includes(n);
       if (!inRetrieved && !inKb) {
-        try {
-          await transitionChatMode(chatId, 'ai', 'human_pending_flag', 'ungrounded_number');
-        } catch (_) {}
-        await audit0.write('auto_reply_hold', { chatId, tenantId, reason: 'ungrounded_number', number: n });
-        return { decision: 'hold', reason: 'ungrounded_number' };
+        return escalate(
+          'ungrounded_number',
+          { number: n },
+          { confidence: parsed.confidence, reasoning: parsed.reasoning }
+        );
       }
     }
 
