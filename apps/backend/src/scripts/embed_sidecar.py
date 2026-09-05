@@ -29,9 +29,12 @@ args = ap.parse_args()
 
 t0 = time.time()
 print(f'[sidecar] loading model from {args.model}', flush=True)
+# get_sentence_embedding_dimension() is the API present across
+# sentence-transformers 2.x-5.x; get_embedding_dimension() is a newer alias
+# that does not exist in 3.x and broke the Docker image.
 from sentence_transformers import SentenceTransformer
 m = SentenceTransformer(args.model)
-print(f'[sidecar] model loaded in {time.time()-t0:.1f}s, dim={m.get_embedding_dimension()}', flush=True)
+print(f'[sidecar] model loaded in {time.time()-t0:.1f}s, dim={m.get_sentence_embedding_dimension()}', flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):

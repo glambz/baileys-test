@@ -1,0 +1,29 @@
+# Docker reads .dockerignore from the BUILD CONTEXT root, not the repo root.
+# This file must live here (context is ./apps/backend) or none of it applies —
+# which previously baked .env and the paired WhatsApp session into the image,
+# and copied the host's pnpm symlink farm over the container's install.
+
+# Host node_modules is a pnpm symlink farm pointing at absolute host paths.
+# Copying it in shadows the image's own install and every require() fails.
+node_modules
+
+# Secrets. Compose supplies these via env_file at runtime.
+.env
+.env.*
+!.env.example
+
+# The paired WhatsApp session — mounted as a volume, never baked in.
+auth_info
+
+# Runtime state and logs.
+runtime
+inbox_logs
+logs
+data
+tmp
+*.log
+
+# Build inputs that need not be in the image.
+Dockerfile
+Dockerfile.*
+.dockerignore

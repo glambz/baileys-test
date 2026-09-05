@@ -1,0 +1,6 @@
+# Embedding sidecar deps (src/scripts/embed_sidecar.py).
+# torch CPU wheels only — the sidecar runs on CPU and the CUDA wheels are
+# multi-GB for no benefit here.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
+sentence-transformers==3.3.1

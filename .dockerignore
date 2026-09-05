@@ -1,0 +1,19 @@
+node_modules
+**/node_modules
+.git
+.gitignore
+# Never copy the paired WhatsApp session or secrets into an image layer —
+# compose mounts auth_info as a volume and supplies env via env_file.
+**/auth_info
+**/.env
+**/.env.*
+!**/.env.example
+**/runtime
+**/inbox_logs
+**/data
+**/logs
+**/tmp
+**/dist
+**/*.log
+**/verification
+docs

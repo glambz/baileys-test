@@ -1,0 +1,13 @@
+# Must live in the build context root (./apps/frontend) to take effect.
+
+# pnpm symlink farm with absolute host paths — shadows the image's install.
+node_modules
+
+dist
+.env
+.env.local
+.env.*.local
+*.log
+
+Dockerfile
+.dockerignore
