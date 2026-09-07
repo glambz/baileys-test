@@ -16,6 +16,12 @@ import { CrmSecondaryNav } from '@/components/crm/CrmSecondaryNav';
 import { useAuthStatus } from '@/hooks/useAuthStatus';
 
 /**
+ * Routes reachable while the WhatsApp socket is not open. Everything else
+ * is redirected to /auth-init by the gate below.
+ */
+const AUTH_FLOW_PATHS = new Set(['/auth-init', '/qr', '/whatsapp-connection']);
+
+/**
  * Top-level chrome — Pane 1 (icon-only left rail) + menu-driven Pane 2
  * (chat sidebar for chats/ai, CRM secondary nav for crm) + Pane 3
  * (routed `<Outlet />`). Hoisted `<AuthStatusBanner />` shows above the row.
@@ -43,10 +49,14 @@ export function AppShell() {
   // Auth gate: when WhatsApp is not yet open, redirect to the init page
   // (unless we're already on an auth-flow page). Skipped when status
   // hasn't loaded yet to avoid an infinite redirect loop on first paint.
+  //
+  // /whatsapp-connection has to be exempt for the same reason /qr is: it is
+  // the page an operator opens BECAUSE the socket is down, so gating it
+  // behind a live connection would make it unreachable exactly when it is
+  // needed — the gate would bounce them to /auth-init instead.
   useEffect(() => {
     if (!authStatus) return;
-    const onAuthFlow = location.pathname === '/auth-init' || location.pathname === '/qr';
-    if (authStatus.state !== 'open' && !onAuthFlow) {
+    if (authStatus.state !== 'open' && !AUTH_FLOW_PATHS.has(location.pathname)) {
       navigate('/auth-init', { replace: true });
     }
   }, [authStatus?.state, location.pathname, navigate]);
@@ -72,6 +82,10 @@ export function AppShell() {
     if (path.startsWith('/crm')) next = 'crm';
     else if (path.startsWith('/ai-settings')) next = 'settings';
     else if (path.startsWith('/ai')) next = 'ai';
+    // Without this the rail would highlight Chats on /whatsapp-connection and
+    // Pane 2 would open the chat list beside it; 'whatsapp' is deliberately
+    // not in isKnownMenu, so the connection panel gets the full width.
+    else if (path.startsWith('/whatsapp-connection')) next = 'whatsapp';
     else next = 'chats';
     if (useUiStore.getState().pane1Selection !== next) {
       useUiStore.getState().setPane1Selection(next);

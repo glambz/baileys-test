@@ -98,6 +98,11 @@ QR scan from <http://localhost:5176/qr>.
 
 Use `docker compose down` (no `-v`) for routine stops.
 
+To pair or re-pair, open **WhatsApp Connection** in the left rail
+(<http://localhost:5176/whatsapp-connection>): one button each for init, QR,
+and status. That route is exempt from the app's auth gate for the obvious
+reason — it is the page you need when the socket is down.
+
 ## The embedding model
 
 The sidecar needs `MarcoAland/Indonesian-bge-m3` (~2.2 GB). By default it is
@@ -141,6 +146,11 @@ If you are on an image built before that fix, clear it once with:
 ```bash
 docker run --rm -v baileystest_wa_auth:/lock alpine rm -f /lock/server.lock
 ```
+
+**Frontend edits not showing up** — the frontend service bind-mounts
+`./apps/frontend` and sets `CHOKIDAR_USEPOLLING`, because inotify events do
+not cross a Windows/macOS bind mount and Vite would otherwise never notice a
+change. If HMR still looks stuck, `docker compose restart frontend`.
 
 **Running the test suite while the stack is up** — both Postgres (55432) and
 the sidecar (8765) publish to the host precisely so `pnpm test` works against

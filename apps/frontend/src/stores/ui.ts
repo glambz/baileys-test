@@ -6,7 +6,7 @@ export type ThemeMode = 'light' | 'dark' | 'system';
  * Pane 1 (left rail) selection in the new three-pane layout per
  * `docs/crm/features/navigation/spec.md` §1.1.
  */
-export type Pane1Selection = 'chats' | 'crm' | 'ai' | 'settings';
+export type Pane1Selection = 'chats' | 'crm' | 'ai' | 'settings' | 'whatsapp';
 
 interface UiState {
   lastOpenedChatId: string | null;

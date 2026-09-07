@@ -131,6 +131,11 @@ export const AuthStatusSchema = z
       .nullable()
       .optional(),
     lastUpdatedAt: z.number().nullable().optional(),
+    // Diagnostics the BE has always sent but the FE used to drop. The
+    // connection page surfaces them: "close" alone does not tell an operator
+    // whether the socket was terminated, is retrying, or was never started.
+    lastError: z.string().nullable().optional(),
+    reconnectAttempts: z.number().nullable().optional(),
   })
   .transform((raw) => ({
     connected: raw.connected ?? (raw.user !== null && raw.user !== undefined),
@@ -138,7 +143,35 @@ export const AuthStatusSchema = z
     userJid: raw.userJid ?? raw.user?.id ?? null,
     userName: raw.userName ?? raw.user?.name ?? null,
     lastUpdatedAt: raw.lastUpdatedAt ?? Math.floor(Date.now() / 1000),
+    lastError: raw.lastError ?? null,
+    reconnectAttempts: raw.reconnectAttempts ?? 0,
   }));
+
+/**
+ * GET /api/auth/status answers `{ status: {...} }`, but some callers and the
+ * mock layer hand back a flat object. Accept either rather than making every
+ * call site remember which it is — passing the envelope straight to
+ * AuthStatusSchema fails with "state Required", which is precisely the bug
+ * that kept the header's connection badge stuck on "Error".
+ */
+export const AuthStatusEnvelopeSchema = z
+  // z.unknown() rather than a union: a `z.object({ status: z.unknown() })`
+  // branch matches ANY object and strips every key it does not declare, so a
+  // flat `{ state, connected }` payload (what the mock layer returns) came
+  // out as `{ status: undefined }` and then unwrapped to undefined. Passing
+  // the value through untouched lets the transform inspect what really
+  // arrived.
+  .unknown()
+  .transform((raw) => {
+    if (raw && typeof raw === 'object' && 'status' in raw) {
+      const inner = (raw as { status: unknown }).status;
+      // Guard against `{ status: undefined }` — unwrapping that loses the
+      // payload entirely.
+      if (inner !== null && inner !== undefined) return inner;
+    }
+    return raw;
+  })
+  .pipe(AuthStatusSchema);
 
 // --- CrmChatsModes (GET /api/crm/chats/modes) ---
 // Per-chat AI reply mode. The BE maps `chatId -> AIReplyMode`.

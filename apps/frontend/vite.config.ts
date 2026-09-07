@@ -19,7 +19,9 @@ export default defineConfig({
       '/api': {
         // Env-driven so the same config works on the host (default) and in
         // Docker, where the backend is a service name rather than localhost.
-        target: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3000',
+        // globalThis.process rather than a bare `process`: this file is
+        // linted with the browser globals, where `process` is undefined.
+        target: globalThis.process?.env?.VITE_API_PROXY_TARGET || 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
     },

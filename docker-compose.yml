@@ -129,6 +129,20 @@ services:
     environment:
       VITE_USE_REAL_API: 'true'
       VITE_API_PROXY_TARGET: http://backend:3000
+      # inotify events do not cross a Windows/macOS bind mount, so Vite never
+      # sees host edits and HMR silently does nothing until the container is
+      # restarted. chokidar (which Vite watches with) falls back to polling
+      # when this is set.
+      CHOKIDAR_USEPOLLING: 'true'
+      CHOKIDAR_INTERVAL: '400'
+    volumes:
+      # Bind the source in so the dev server actually serves what is on disk
+      # and HMR works. Without this the container runs whatever was COPYed at
+      # build time, which makes shipping a dev server pointless — every edit
+      # needed a rebuild. The anonymous volume keeps the image's
+      # node_modules (installed for linux) from being shadowed by the host's.
+      - ./apps/frontend:/app
+      - /app/node_modules
     ports:
       - '5176:5176'
     depends_on:

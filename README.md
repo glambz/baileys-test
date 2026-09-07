@@ -45,7 +45,10 @@ cp apps/backend/.env.example apps/backend/.env   # add your MiniMax API key
 docker compose up -d --build
 ```
 
-Then open <http://localhost:5176> and pair the WhatsApp session at `/qr`.
+Then open <http://localhost:5176>. To pair or re-pair the WhatsApp session,
+go to **WhatsApp Connection** in the left rail (`/whatsapp-connection`) —
+one button each to initialise the socket, fetch a QR, and read the current
+status. `/qr` is the older guided flow, which polls and redirects on its own.
 
 Running on the host instead needs Postgres with pgvector, the Python embedding
 sidecar (`apps/backend/src/scripts/embed_sidecar.py`), and the backend and

@@ -16,6 +16,7 @@ const AiWorkspacePage = lazy(() => import('@/pages/AiWorkspacePage'));
 const AiSettingsPage = lazy(() => import('@/pages/AiSettingsPage'));
 const AuthInitPage = lazy(() => import('@/pages/AuthInitPage'));
 const QrScanPage = lazy(() => import('@/pages/QrScanPage'));
+const WhatsAppConnectionPage = lazy(() => import('@/pages/WhatsAppConnectionPage'));
 
 const withSuspense = (Component: React.ComponentType) => (
   <Suspense fallback={<SkeletonPage />}>
@@ -50,6 +51,10 @@ export const router = createBrowserRouter([
       { path: 'crm/:entityName/:recordId', element: withSuspense(CrmRecordDetailPage) },
       // AI workspace (team scope)
       { path: 'ai', element: withSuspense(AiWorkspacePage) },
+      // WhatsApp connection control panel (manual init / QR / status).
+      // Distinct from the /qr onboarding flow, which auto-polls and
+      // redirects; this one does exactly what the operator clicks.
+      { path: 'whatsapp-connection', element: withSuspense(WhatsAppConnectionPage) },
       // AI Settings (per-tenant configuration; full-width, single column)
       { path: 'ai-settings', element: withSuspense(AiSettingsPage) },
       // Auth flow (standalone pages — work even before the main app's

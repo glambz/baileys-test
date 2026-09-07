@@ -16,4 +16,12 @@ export interface AuthStatus {
   userName?: string | null;
   /** Unix seconds of the last state transition; `null` when unknown. */
   lastUpdatedAt?: number | null;
+  /**
+   * Last socket error reported by Baileys, e.g. "Connection Terminated".
+   * `state: 'close'` on its own does not distinguish a socket that was
+   * terminated from one that was never started.
+   */
+  lastError?: string | null;
+  /** How many times the backend has retried the socket since it last opened. */
+  reconnectAttempts?: number | null;
 }

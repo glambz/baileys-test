@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Briefcase, MessageSquare, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Briefcase, MessageSquare, SlidersHorizontal, Sparkles, Smartphone } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Tooltip,
@@ -21,6 +21,7 @@ const ITEMS: RailItem[] = [
   { id: 'chats', label: 'Chats', ariaLabel: 'Buka Chats', icon: MessageSquare, href: '/chats' },
   { id: 'crm', label: 'CRM', ariaLabel: 'Buka CRM', icon: Briefcase, href: '/crm' },
   { id: 'ai', label: 'AI', ariaLabel: 'Buka AI', icon: Sparkles, href: '/ai' },
+  { id: 'whatsapp', label: 'WhatsApp Connection', ariaLabel: 'Buka WhatsApp Connection', icon: Smartphone, href: '/whatsapp-connection' },
   { id: 'settings', label: 'AI Settings', ariaLabel: 'Buka AI Settings', icon: SlidersHorizontal, href: '/ai-settings' },
 ];
 

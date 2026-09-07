@@ -72,7 +72,8 @@ describe('EscalationBriefing', () => {
   });
 
   it('defaults to neutral sentiment when the model omits it', () => {
-    const { sentiment: _omitted, ...rest } = FULL;
+    const rest = { ...FULL };
+    delete rest.sentiment;
     expect(render(rest)).toContain('Netral');
   });
 
