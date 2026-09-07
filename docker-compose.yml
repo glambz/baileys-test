@@ -47,6 +47,12 @@ services:
       EMBED_SIDECAR_HOST: 0.0.0.0
       EMBED_SIDECAR_PORT: '8765'
       EMBEDDING_MODEL_PATH: MarcoAland/Indonesian-bge-m3
+    ports:
+      # Published for the same reason as postgres:55432 — the test suite runs
+      # on the host and reads EMBEDDING_BASE_URL from apps/backend/.env
+      # (127.0.0.1:8765). Without this, `pnpm test` fails with "fetch failed"
+      # once the sidecar moves into a container.
+      - '8765:8765'
     volumes:
       # The 2.2 GB model is not baked into the image. By default it lives in a
       # named volume and is downloaded on first start. To reuse a cache you

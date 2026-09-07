@@ -131,6 +131,21 @@ pins it; only an override in `apps/backend/.env` could break it.
 **Port already in use on 55432** — the standalone `baileys-pg` container is
 still running. See the migration section above.
 
+**`Another instance of this server is already running (pid 1)`** — fixed. The
+single-instance lock compared only the pid, and in a container the app is
+always pid 1, so the lock left by the previous container always looked live
+and every restart refused to boot. The lock now also compares the recorded
+hostname (the container id) and treats a lock naming our own pid as stale.
+If you are on an image built before that fix, clear it once with:
+
+```bash
+docker run --rm -v baileystest_wa_auth:/lock alpine rm -f /lock/server.lock
+```
+
+**Running the test suite while the stack is up** — both Postgres (55432) and
+the sidecar (8765) publish to the host precisely so `pnpm test` works against
+the containerised services. Nothing extra to start.
+
 **Backend logs `Timed Out` from Baileys on startup** — normal transient noise
 while the WhatsApp socket runs its init queries; check
 `GET /api/auth/status` for the real state.
