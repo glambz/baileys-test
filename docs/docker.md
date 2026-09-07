@@ -7,7 +7,7 @@ docker compose up -d --build
 | Service | Host port | Purpose |
 |---|---|---|
 | `postgres` | 55432 | pgvector/pg16 — chats, messages, KB chunks, record embeddings |
-| `sidecar` | — | sentence-transformers embedding API (bge-m3, 1024-dim) |
+| `sidecar` | 8765 | sentence-transformers embedding API (bge-m3, 1024-dim) |
 | `backend` | 3000 | Express + Baileys WhatsApp socket, AI pipeline |
 | `frontend` | 5176 | Vite dev server (operator dashboard) |
 
