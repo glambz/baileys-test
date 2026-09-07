@@ -2,20 +2,55 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { KnowledgeFileStatus } from '@/types/crm';
 
+/**
+ * Ingest-status chip.
+ *
+ * Keys match the backend's knowledge_files.status CHECK constraint
+ * (queued / ingesting / indexed / failed). They previously did not, and an
+ * unmapped status made `COPY[status]` undefined — reading `.className` off
+ * that threw and took the entire Knowledge route down with it.
+ *
+ * `status` is typed loosely and resolved through a fallback on purpose: a
+ * status the frontend has not been taught about should render as an unknown
+ * chip, never crash the page it appears on.
+ */
 const COPY: Record<KnowledgeFileStatus, { label: string; className: string }> = {
-  pending: { label: 'Menunggu', className: 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200' },
-  chunked: { label: 'Dipecah', className: 'bg-amber-100 text-amber-900 dark:bg-amber-900/30 dark:text-amber-200' },
-  embedded: { label: 'Siap', className: 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/30 dark:text-emerald-200' },
-  failed: { label: 'Gagal', className: 'bg-rose-100 text-rose-900 dark:bg-rose-900/30 dark:text-rose-200' },
+  queued: {
+    label: 'Menunggu',
+    className: 'bg-muted text-muted-foreground',
+  },
+  ingesting: {
+    label: 'Diproses',
+    className: 'bg-warning/15 text-warning',
+  },
+  indexed: {
+    label: 'Siap',
+    className: 'bg-success/15 text-success',
+  },
+  failed: {
+    label: 'Gagal',
+    className: 'bg-destructive/15 text-destructive',
+  },
 };
 
+function metaFor(status: string) {
+  return (
+    COPY[status as KnowledgeFileStatus] ?? {
+      // Show the raw value rather than a generic "unknown" so an unexpected
+      // backend state is diagnosable from the UI.
+      label: status || 'Tidak diketahui',
+      className: 'bg-muted text-muted-foreground',
+    }
+  );
+}
+
 interface StatusChipProps {
-  status: KnowledgeFileStatus;
+  status: KnowledgeFileStatus | string;
   errorMessage?: string | null;
 }
 
 export function StatusChip({ status, errorMessage }: StatusChipProps) {
-  const meta = COPY[status];
+  const meta = metaFor(status);
   const chip = (
     <Badge variant="outline" className={meta.className}>
       {meta.label}

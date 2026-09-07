@@ -97,6 +97,13 @@ services:
     ports:
       - '3000:3000'
     volumes:
+      # Source, read-only. Without this every backend edit needs a full image
+      # rebuild before `docker compose restart` picks it up — which is a
+      # confusing failure mode, because restarting silently keeps serving the
+      # old code. Read-only is safe: everything the app writes (auth_info,
+      # runtime, data) lives outside src and is mounted separately below.
+      # There is no watcher, so a restart is still required — just not a build.
+      - ./apps/backend/src:/app/src:ro
       # auth_info holds the paired WhatsApp session. It MUST persist or every
       # restart needs a fresh QR scan.
       - wa_auth:/app/auth_info

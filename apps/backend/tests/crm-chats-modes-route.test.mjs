@@ -13,6 +13,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import dotenv from 'dotenv';
 import request from 'supertest';
 
+// Account scoping (migration 014): chats are keyed on
+// (account_jid, id) and every read filters by account, so a seed row
+// must carry the same account the code under test will resolve.
+// Derived from the app's own resolver rather than hardcoded, so the
+// seed and the query can never disagree.
+const { currentAccountId } = await import('../src/whatsapp/account.js');
+const TEST_ACCOUNT = currentAccountId() || '';
+
 dotenv.config();
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -63,11 +71,11 @@ describe('GET /api/crm/chats/modes', () => {
 
     const pool = getPool();
     await pool.query(
-      `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode)
-       VALUES ($1, $1, '+628444000111', '', $2, 0, 'ai'),
-              ($3, $3, '+628444000222', '', $2, 0, 'human_pending_flag'),
-              ($4, $4, '+628444000333', '', $2, 0, 'human')`,
-      [CHAT_A, NOW, CHAT_B, CHAT_C],
+      `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode, account_jid)
+       VALUES ($1, $1, '+628444000111', '', $2, 0, 'ai', $5),
+              ($3, $3, '+628444000222', '', $2, 0, 'human_pending_flag', $5),
+              ($4, $4, '+628444000333', '', $2, 0, 'human', $5)`,
+      [CHAT_A, NOW, CHAT_B, CHAT_C, TEST_ACCOUNT],
     );
 
     const r = await request(app).get('/api/crm/chats/modes');

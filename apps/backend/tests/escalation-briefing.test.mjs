@@ -19,6 +19,14 @@ dotenv.config({ path: path.join(process.cwd(), '.env') });
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const { getPool } = await import('../src/db/client.js');
+
+// Account scoping (migration 014): chats are keyed on
+// (account_jid, id) and every read filters by account, so a seed row
+// must carry the same account the code under test will resolve.
+// Derived from the app's own resolver rather than hardcoded, so the
+// seed and the query can never disagree.
+const { currentAccountId } = await import('../src/whatsapp/account.js');
+const TEST_ACCOUNT = currentAccountId() || '';
 const escalation = await import('../src/ai/settings/escalation.js');
 const { parseBriefing, fallbackBriefing, generateEscalationBriefing, loadEscalationBriefing } = escalation;
 
@@ -59,10 +67,10 @@ describe.skipIf(!HAS_DB)('generateEscalationBriefing', () => {
 
   beforeAll(async () => {
     await getPool().query(
-      `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode)
-       VALUES ($1, $1, '6289999988888', '', 0, 0, 'ai')
-       ON CONFLICT (id) DO UPDATE SET ai_mode = 'ai'`,
-      [CHAT_ID]
+      `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode, account_jid)
+       VALUES ($1, $1, '6289999988888', '', 0, 0, 'ai', $2)
+       ON CONFLICT (account_jid, id) DO UPDATE SET ai_mode = 'ai'`,
+      [CHAT_ID, TEST_ACCOUNT]
     );
     await getPool().query('DELETE FROM messages WHERE chat_id = $1', [CHAT_ID]);
   });

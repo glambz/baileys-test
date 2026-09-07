@@ -15,6 +15,7 @@
  */
 const { getPool } = require('../../db/client');
 const { createChatCompletion } = require('../llm');
+const { currentAccountId } = require('../../whatsapp/account');
 
 const MAX_CONTEXT_MESSAGES = Number(process.env.ESCALATION_MAX_CONTEXT_MESSAGES || 20);
 const MAX_BODY_CHARS = 400;
@@ -103,10 +104,10 @@ async function generateEscalationBriefing({
     const r = await pool.query(
       `SELECT direction, body, timestamp
          FROM messages
-        WHERE chat_id = $1
+        WHERE chat_id = $1 AND account_jid = $3
         ORDER BY timestamp DESC
         LIMIT $2`,
-      [chatId, MAX_CONTEXT_MESSAGES]
+      [chatId, MAX_CONTEXT_MESSAGES, currentAccountId() || '']
     );
     // Chronological (oldest first) so the model reads the arc in order.
     lines = r.rows
@@ -170,8 +171,8 @@ async function generateEscalationBriefing({
           SET escalation_briefing = $1::jsonb,
               escalation_reason   = $2,
               escalation_at       = $3
-        WHERE id = $4`,
-      [JSON.stringify(briefing), reason || null, nowSec(), chatId]
+        WHERE id = $4 AND account_jid = $5`,
+      [JSON.stringify(briefing), reason || null, nowSec(), chatId, currentAccountId() || '']
     );
   } catch (_) {
     // Persisting is best-effort; the mode transition already happened and
@@ -184,8 +185,8 @@ async function generateEscalationBriefing({
 async function loadEscalationBriefing(chatId) {
   try {
     const r = await getPool().query(
-      'SELECT escalation_briefing, escalation_reason, escalation_at FROM chats WHERE id = $1',
-      [chatId]
+      'SELECT escalation_briefing, escalation_reason, escalation_at FROM chats WHERE id = $1 AND account_jid = $2',
+      [chatId, currentAccountId() || '']
     );
     if (r.rows.length === 0) return null;
     return {

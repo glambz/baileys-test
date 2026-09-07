@@ -16,6 +16,7 @@
  */
 const { Router } = require('express');
 const { getPool } = require('../db/client');
+const { currentAccountId } = require('../whatsapp/account');
 
 const router = Router();
 
@@ -29,10 +30,15 @@ router.get('/', async (_req, res, next) => {
       // ThreadHeader (which derives mode from chat.aiMode ?? 'ai') always
       // rendered the AI segment on initial mount, even when the BE actually
       // had a human_pending_flag mode.
+      // Account-scoped. This query had NO where clause at all, so after
+      // switching linked accounts the sidebar listed the previous account's
+      // chats alongside the current one's.
       `SELECT id, jid, phone, ai_mode, last_message_at
          FROM chats
+        WHERE account_jid = $1
         ORDER BY last_message_at DESC NULLS LAST
         LIMIT 200`,
+      [currentAccountId() || ''],
     );
     res.json({
       chats: r.rows.map((row) => ({
@@ -62,8 +68,8 @@ router.get('/:id/messages', async (req, res, next) => {
     const limit = Math.min(Number(req.query.limit) || 50, 500);
     const beforeParam = req.query.before ? Number(req.query.before) : undefined;
     const afterParam = req.query.after ? Number(req.query.after) : undefined;
-    const params = [chatId];
-    let where = 'chat_id = $1';
+    const params = [chatId, currentAccountId() || ''];
+    let where = 'chat_id = $1 AND account_jid = $2';
     if (typeof beforeParam === 'number' && !Number.isNaN(beforeParam)) {
       params.push(beforeParam);
       where += ` AND timestamp < $${params.length}`;
@@ -140,9 +146,9 @@ router.post('/:id/messages', async (req, res, next) => {
       .slice(2, 8)}`;
     const ts = Math.floor(Date.now() / 1000);
     await pool.query(
-      `INSERT INTO messages (id, chat_id, direction, body, sender_name, timestamp, is_fallback)
-       VALUES ($1, $2, 'out', $3, NULL, $4, false)`,
-      [id, chatId, body, ts],
+      `INSERT INTO messages (id, chat_id, direction, body, sender_name, timestamp, is_fallback, account_jid)
+       VALUES ($1, $2, 'out', $3, NULL, $4, false, $5)`,
+      [id, chatId, body, ts, currentAccountId() || ''],
     );
     res.json({
       message: {

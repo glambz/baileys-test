@@ -90,11 +90,27 @@ export function Composer({ chatId, phone }: ComposerProps) {
     }
   };
 
-  // BUG-PUSH-EVENTS-TYPING: notify the BE that this user is typing.
-  // The hook throttles internally (one event per ~3s).
-  const handleChange = () => {
-    if (body.trim().length === 0) return;
-    sendTyping();
+  /**
+   * Keystroke handler.
+   *
+   * MUST forward the event to react-hook-form's own onChange. This prop is
+   * listed after `{...bodyRegistration}` in the JSX below, so in React it
+   * REPLACES the onChange that `register('body')` returned — and RHF v7
+   * attaches no native DOM listeners, so that callback is the only path from
+   * a keystroke into the form store. The previous version called only
+   * sendTyping(), so `_formValues.body` never left its '' default,
+   * `watch('body')` always returned '', and the send button's
+   * `body.trim().length === 0` clause was permanently true. Combined with
+   * the button variant's `disabled:pointer-events-none`, that made Send
+   * literally unclickable with no visible explanation.
+   *
+   * Reads `event.target.value` rather than the `body` state variable because
+   * `body` is one render stale — using it dropped the typing ping on the
+   * first keystroke of every message.
+   */
+  const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    void bodyRegistration.onChange(event);
+    if (event.target.value.trim().length > 0) sendTyping();
   };
 
   const disabled =

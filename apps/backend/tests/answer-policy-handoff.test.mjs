@@ -21,6 +21,14 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vites
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+
+// Account scoping (migration 014): chats are keyed on
+// (account_jid, id) and every read filters by account, so a seed row
+// must carry the same account the code under test will resolve.
+// Derived from the app's own resolver rather than hardcoded, so the
+// seed and the query can never disagree.
+const { currentAccountId } = await import('../src/whatsapp/account.js');
+const TEST_ACCOUNT = currentAccountId() || '';
 dotenv.config();
 
 const AUDIT_TMP = path.join(process.cwd(), 'tmp', 'answer-policy-audit');
@@ -86,10 +94,10 @@ beforeEach(async () => {
   if (!HAS_DB) return;
   const pool = getPool();
   await pool.query(
-    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode)
-     VALUES ($1, $1, '+6281236012938', '', EXTRACT(EPOCH FROM NOW())::int, 0, 'ai')
-     ON CONFLICT (id) DO UPDATE SET ai_mode = 'ai', phone = EXCLUDED.phone`,
-    [TEST_CHAT_ID]
+    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode, account_jid)
+     VALUES ($1, $1, '+6281236012938', '', EXTRACT(EPOCH FROM NOW())::int, 0, 'ai', $2)
+     ON CONFLICT (account_jid, id) DO UPDATE SET ai_mode = 'ai', phone = EXCLUDED.phone`,
+    [TEST_CHAT_ID, TEST_ACCOUNT]
   );
   // Seed a KB chunk so BM25 scores the test query above TAU_TURBO.
   // Without this, retrievalScore is 0 and the trigger short-circuits at

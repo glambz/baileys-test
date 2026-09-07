@@ -124,7 +124,9 @@ export default function CrmKnowledgePage() {
                     </td>
                     <td className="px-2 py-2 text-right text-xs">{f.chunksCount}</td>
                     <td className="px-2 py-2 font-mono text-xs text-muted-foreground">
-                      {dayjs.unix(f.uploadedAt).format('YYYY-MM-DD HH:mm')}
+                      {f.uploadedAt
+                        ? dayjs.unix(f.uploadedAt).format('YYYY-MM-DD HH:mm')
+                        : '—'}
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex justify-end gap-1">

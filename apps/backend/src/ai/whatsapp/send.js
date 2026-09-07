@@ -4,6 +4,7 @@
  * Source: docs/crm/plans/20-whatsapp-trigger-state-machine.md step 2.
  */
 const { getPool } = require('../../db/client');
+const { currentAccountId } = require('../../whatsapp/account');
 const audit = require('../audit/log');
 const episodic = require('../store/episodic');
 
@@ -44,8 +45,8 @@ async function sendReply({ sock, chatId, body, tenantId, isFallback }) {
       // Persist outbound message.
       const pool = getPool();
       await pool.query(
-        `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status, is_fallback)
-         VALUES ($1, $2, 'out', $3, $4::jsonb, $5, 'sent', $6)
+        `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status, is_fallback, account_jid)
+         VALUES ($1, $2, 'out', $3, $4::jsonb, $5, 'sent', $6, $7)
          ON CONFLICT (id) DO NOTHING`,
         [
           messageId || `out_${Date.now()}`,
@@ -54,6 +55,7 @@ async function sendReply({ sock, chatId, body, tenantId, isFallback }) {
           JSON.stringify({ id: messageId, fromMe: true }),
           timestamp,
           isFallback === true,
+          currentAccountId() || '',
         ]
       );
       // Update chat preview. `chats.last_message_at` is BIGINT epoch seconds
@@ -62,8 +64,8 @@ async function sendReply({ sock, chatId, body, tenantId, isFallback }) {
       await pool.query(
         `UPDATE chats
          SET last_message_preview = $1, last_message_at = $2, unread_count = 0
-         WHERE id = $3`,
-        [body.slice(0, 200), timestamp, chatId]
+         WHERE id = $3 AND account_jid = $4`,
+        [body.slice(0, 200), timestamp, chatId, currentAccountId() || '']
       );
       await audit.write('auto_reply_sent', {
         chatId,

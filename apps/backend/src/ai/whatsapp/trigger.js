@@ -44,6 +44,7 @@ const episodic = require('../store/episodic');
 const summaryStore = require('../settings/summary');
 const escalationStore = require('../settings/escalation');
 const { startTyping } = require('../../whatsapp/typing');
+const { currentAccountId } = require('../../whatsapp/account');
 
 const EPISODIC_TOPK = Number(process.env.EPISODIC_TOPK || 10);
 
@@ -152,8 +153,8 @@ async function processInboundMessage(inboundMsg, ctx) {
       try {
         const pool = require('../../db/client').getPool();
         await pool.query(
-          `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status)
-           VALUES ($1, $2, 'in', $3, $4::jsonb, $5, 'received')
+          `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status, account_jid)
+           VALUES ($1, $2, 'in', $3, $4::jsonb, $5, 'received', $6)
            ON CONFLICT (id) DO UPDATE
              SET body = EXCLUDED.body, timestamp = EXCLUDED.timestamp`,
           [
@@ -162,6 +163,7 @@ async function processInboundMessage(inboundMsg, ctx) {
             body,
             JSON.stringify({ id: inboundMsgId, fromMe: false }),
             lastMessageAt,
+            currentAccountId() || '',
           ]
         );
         await episodic.embedAndStoreMessage({

@@ -39,6 +39,24 @@ function listMigrationFiles() {
     .sort();
 }
 
+/**
+ * The paired WhatsApp account, bare digits, or '' when unknown.
+ *
+ * Read from the inbox writer's persisted mapping file rather than the live
+ * socket: migrations run from the CLI (`pnpm db:migrate`) where no socket
+ * exists. Never throws — an unknown account leaves historic rows unscoped,
+ * which is recoverable, whereas a failed migration is not.
+ */
+function currentSelfPn() {
+  try {
+    // eslint-disable-next-line global-require
+    const inbox = require('../inbox/writer');
+    return inbox.getSelfPn() || '';
+  } catch (_) {
+    return '';
+  }
+}
+
 function checksum(text) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
@@ -85,6 +103,15 @@ async function runMigrations(opts = {}) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Expose the currently-paired WhatsApp account to the migration.
+      // 014-account-scoping.sql uses it to backfill account_jid on rows that
+      // predate account scoping; without it those rows stay unscoped rather
+      // than being attributed to a guess. Transaction-local (`is_local` =
+      // true), so it cannot leak into other sessions.
+      await client.query('SELECT set_config($1, $2, true)', [
+        'baileys.self_pn',
+        currentSelfPn(),
+      ]);
       await client.query(sql);
       await client.query(
         `INSERT INTO schema_migrations (version, checksum)

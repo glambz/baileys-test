@@ -13,6 +13,44 @@ const logger = require('../../utils/logger');
 const router = express.Router();
 router.use(requireTenant);
 
+/**
+ * One canonical wire shape for an entity definition.
+ *
+ * Every /entities response goes through this. They previously did not:
+ * POST returned `{ id, ...body, version }` and PATCH returned
+ * `{ id, version }`, both missing createdAt/updatedAt — which the FE's
+ * EntitySchema requires as numbers. So creating an entity inserted the row
+ * and *then* threw a zod error in the client, which is why the operator saw
+ * "adding new entity gives me an error, but the entity is created".
+ */
+function serializeEntity(row) {
+  if (!row) return null;
+  const ms = (v) => (v instanceof Date ? v.getTime() : v);
+  return {
+    id: row.id,
+    name: row.name,
+    label: row.label,
+    icon: row.icon,
+    description: row.description,
+    schemaJson: row.schema_json,
+    version: row.version,
+    createdAt: ms(row.created_at),
+    updatedAt: ms(row.updated_at),
+  };
+}
+
+const ENTITY_COLUMNS = `id, name, label, icon, description, schema_json, version, deleted_at, created_at, updated_at`;
+
+/** Load one entity by id, scoped to the tenant. */
+async function loadEntityById(pool, tenantId, id) {
+  const r = await pool.query(
+    `SELECT ${ENTITY_COLUMNS} FROM entity_definitions
+      WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+    [id, tenantId]
+  );
+  return r.rows[0] || null;
+}
+
 // GET /api/crm/entities
 router.get('/entities', async (req, res, next) => {
   try {
@@ -23,17 +61,41 @@ router.get('/entities', async (req, res, next) => {
        ORDER BY updated_at DESC`,
       [req.tenantId]
     );
-    return res.json({ entities: r.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      label: row.label,
-      icon: row.icon,
-      description: row.description,
-      schemaJson: row.schema_json,
-      version: row.version,
-      createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
-      updatedAt: row.updated_at instanceof Date ? row.updated_at.getTime() : row.updated_at,
-    })) });
+    return res.json({ entities: r.rows.map(serializeEntity) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/crm/entities/:idOrName
+//
+// The FE's useEntityByName() has always called this, but it was never
+// implemented — the request fell through to the /api/crm/* 404 handler,
+// which is why a newly created entity "cannot be opened". Resolves by id
+// first, then by name, because /crm/:entityName routes by name while the
+// rest of the API addresses entities by id.
+router.get('/entities/:idOrName', async (req, res, next) => {
+  try {
+    const pool = getPool();
+    const key = req.params.idOrName;
+    let row = await loadEntityById(pool, req.tenantId, key);
+    if (!row) {
+      const r = await pool.query(
+        // `name` is not unique — nothing constrains it, and the failed-create
+        // bug above left duplicates behind (three rows named "asda", one per
+        // retry). Order by version then recency so the lookup is at least
+        // deterministic and resolves to the newest definition rather than an
+        // arbitrary row.
+        `SELECT ${ENTITY_COLUMNS} FROM entity_definitions
+          WHERE name = $1 AND tenant_id = $2 AND deleted_at IS NULL
+          ORDER BY version DESC, created_at DESC
+          LIMIT 1`,
+        [key, req.tenantId]
+      );
+      row = r.rows[0] || null;
+    }
+    if (!row) return res.status(404).json({ error: 'EntityNotFound', key });
+    return res.json(serializeEntity(row));
   } catch (err) {
     next(err);
   }
@@ -68,7 +130,11 @@ router.post('/entities', async (req, res, next) => {
         JSON.stringify(parsed.data.schemaJson),
       ]
     );
-    return res.status(201).json({ id, ...parsed.data, version: 1 });
+    // Return the STORED row, not an echo of the request. The echo omitted
+    // createdAt/updatedAt, so the client's parse of a successful create
+    // failed and the operator saw an error for a row that existed.
+    const row = await loadEntityById(pool, req.tenantId, id);
+    return res.status(201).json(serializeEntity(row));
   } catch (err) {
     next(err);
   }
@@ -96,7 +162,8 @@ router.patch('/entities/:id', async (req, res, next) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())`,
       [newId, cur.tenant_id, merged.name, merged.label, merged.icon, merged.description, JSON.stringify(merged.schema_json), next_v]
     );
-    return res.json({ id: newId, version: next_v });
+    const row = await loadEntityById(pool, cur.tenant_id, newId);
+    return res.json(serializeEntity(row));
   } catch (err) {
     next(err);
   }

@@ -16,6 +16,7 @@
  */
 const { getPool } = require('../../db/client');
 const { embedText } = require('../llm/embed');
+const { currentAccountId } = require('../../whatsapp/account');
 
 /**
  * Embed the message body and persist the vector. Idempotent: an existing
@@ -46,8 +47,8 @@ async function embedAndStoreMessage(args) {
   await pool.query(
     `UPDATE messages
         SET embedding = $1::vector
-      WHERE id = $2`,
-    [JSON.stringify(vec), args.id]
+      WHERE id = $2 AND account_jid = $3`,
+    [JSON.stringify(vec), args.id, currentAccountId() || '']
   );
 }
 
@@ -76,12 +77,16 @@ async function episodicSearch(args) {
     params.push(args.minTimestamp);
     tsFilter = `AND timestamp >= $${params.length}`;
   }
+  // Episodic recall must not reach into another linked account's history.
+  params.push(currentAccountId() || '');
+  const acctIdx = params.length;
   params.push(topK);
   const r = await pool.query(
     `SELECT id, direction, body, timestamp,
             1 - (embedding <=> $1::vector) AS score
        FROM messages
       WHERE chat_id = $2
+        AND account_jid = $${acctIdx}
         AND embedding IS NOT NULL
         ${tsFilter}
       ORDER BY embedding <=> $1::vector

@@ -8,7 +8,7 @@ import type { KnowledgeChunk, KnowledgeFile } from '@/types/crm';
  * (`POST /api/crm/knowledge/upload` → `POST /crm/knowledge/files` in the
  * mock registry) must derive its `chunksCount` from the input file via
  * Web Crypto SHA-256, produce stable hashes across calls, and walk the
- * status lifecycle (`pending → chunked → embedded`) inside ~2 seconds.
+ * status lifecycle (`queued -> ingesting -> indexed`) inside ~2 seconds.
  *
  * Re-uploading the same metadata must produce the same chunks
  * (count + chunk hashes identical).
@@ -20,7 +20,7 @@ function makeFile(name: string, size: number): KnowledgeFile {
     filename: name,
     mimeType: 'text/markdown',
     size,
-    status: 'pending',
+    status: 'queued',
     chunksCount: 0,
     ingestedAt: null,
     entityId: null,
@@ -118,7 +118,7 @@ describe('Knowledge chunking (deterministic mock)', () => {
     expect(chunks[1].text.startsWith('A'.repeat(800 - 100))).toBe(true);
   });
 
-  it('POST /api/crm/knowledge/upload (production handler): chunksCount is derived from size, deterministic, and reaches `embedded` within 2s', async () => {
+  it('POST /api/crm/knowledge/upload (production handler): chunksCount is derived from size, deterministic, and reaches `indexed` within 2s', async () => {
     // (a) chunk count derived from size: a bigger upload yields more chunks.
     const smallSize = 1500;
     const largeSize = 9000;
@@ -132,9 +132,9 @@ describe('Knowledge chunking (deterministic mock)', () => {
       size: largeSize,
       mimeType: 'text/markdown',
     });
-    expect(smallCreated.status).toBe('pending');
+    expect(smallCreated.status).toBe('queued');
     expect(smallCreated.chunksCount).toBe(0);
-    expect(largeCreated.status).toBe('pending');
+    expect(largeCreated.status).toBe('queued');
     expect(largeCreated.chunksCount).toBe(0);
 
     // (b) determinism: two uploads with identical metadata produce
@@ -154,8 +154,8 @@ describe('Knowledge chunking (deterministic mock)', () => {
 
     expect(small).toBeDefined();
     expect(large).toBeDefined();
-    expect(small!.status).toBe('embedded');
-    expect(large!.status).toBe('embedded');
+    expect(small!.status).toBe('indexed');
+    expect(large!.status).toBe('indexed');
     expect(small!.chunksCount).toBeGreaterThan(0);
     expect(large!.chunksCount).toBeGreaterThan(small!.chunksCount);
     expect(small!.ingestedAt).not.toBeNull();

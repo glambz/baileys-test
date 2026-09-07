@@ -26,6 +26,14 @@ import dotenv from 'dotenv';
 import request from 'supertest';
 import express from 'express';
 
+// Account scoping (migration 014): chats are keyed on
+// (account_jid, id) and every read filters by account, so a seed row
+// must carry the same account the code under test will resolve.
+// Derived from the app's own resolver rather than hardcoded, so the
+// seed and the query can never disagree.
+const { currentAccountId } = await import('../src/whatsapp/account.js');
+const TEST_ACCOUNT = currentAccountId() || '';
+
 dotenv.config();
 
 const AUDIT_TMP = path.join(process.cwd(), 'tmp', 'handoff-endpoint-audit');
@@ -67,13 +75,13 @@ afterAll(async () => {
 async function seedChat({ aiMode, summary, summaryUpdatedAt }) {
   const pool = getPool();
   await pool.query(
-    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode, conversation_summary, summary_updated_at)
-     VALUES ($1, $1, '+6281236012938', '', $2, 0, $3, $4, $5)
-     ON CONFLICT (id) DO UPDATE SET ai_mode = EXCLUDED.ai_mode,
+    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, ai_mode, conversation_summary, summary_updated_at, account_jid)
+     VALUES ($1, $1, '+6281236012938', '', $2, 0, $3, $4, $5, $6)
+     ON CONFLICT (account_jid, id) DO UPDATE SET ai_mode = EXCLUDED.ai_mode,
                                      conversation_summary = EXCLUDED.conversation_summary,
                                      summary_updated_at = EXCLUDED.summary_updated_at,
                                      last_message_at = EXCLUDED.last_message_at`,
-    [TEST_CHAT_ID, NOW, aiMode, summary || '', summaryUpdatedAt || 0],
+    [TEST_CHAT_ID, NOW, aiMode, summary || '', summaryUpdatedAt || 0, TEST_ACCOUNT],
   );
 }
 
@@ -81,10 +89,13 @@ async function seedMessages(rows) {
   const pool = getPool();
   for (const r of rows) {
     await pool.query(
-      `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status)
-       VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, 'sent')
-       ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, timestamp = EXCLUDED.timestamp`,
-      [r.id, TEST_CHAT_ID, r.direction, r.body, r.timestamp],
+      // account_jid must match, or the endpoint's account-scoped read
+      // returns zero messages for a chat that visibly has some.
+      `INSERT INTO messages (id, chat_id, direction, body, key, timestamp, status, account_jid)
+       VALUES ($1, $2, $3, $4, '{}'::jsonb, $5, 'sent', $6)
+       ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, timestamp = EXCLUDED.timestamp,
+                                      account_jid = EXCLUDED.account_jid`,
+      [r.id, TEST_CHAT_ID, r.direction, r.body, r.timestamp, TEST_ACCOUNT],
     );
   }
 }

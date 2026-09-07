@@ -27,7 +27,18 @@ export type EntityRelationshipCardinality =
   | 'one-to-many'
   | 'many-to-many';
 
-export type KnowledgeFileStatus = 'pending' | 'chunked' | 'embedded' | 'failed';
+/**
+ * Ingest states, matching the backend exactly — these are the four values
+ * allowed by the knowledge_files_status_check constraint in
+ * apps/backend/src/db/migrations/002-ai-tables.sql.
+ *
+ * The FE previously invented its own vocabulary ('pending' | 'chunked' |
+ * 'embedded' | 'failed'), which overlapped the real one on 'failed' only.
+ * Every successfully indexed file therefore fell through StatusChip's
+ * lookup and crashed the whole Knowledge route with
+ * "Cannot read properties of undefined (reading 'className')".
+ */
+export type KnowledgeFileStatus = 'queued' | 'ingesting' | 'indexed' | 'failed';
 
 export interface EntityFieldValidation {
   min?: number;

@@ -227,6 +227,49 @@ function setSelfPn(pnOrJid) {
   }
 }
 
+/**
+ * The operator's own number, bare digits, or null when unpaired.
+ *
+ * Persisted alongside the LID mappings, so it survives a process restart and
+ * a dropped socket — which is what lets account-scoped DB reads keep working
+ * while the socket is briefly down.
+ */
+/**
+ * The active account id, resolved lazily.
+ *
+ * `whatsapp/account.js` requires this module (for the persisted self number),
+ * so requiring it back at the top would close a require cycle and one of the
+ * two would see a half-initialised exports object. Resolving inside the call
+ * avoids that. Falls back to the persisted self number, which is what
+ * account.js would have returned anyway.
+ */
+function activeAccountId() {
+  try {
+    // eslint-disable-next-line global-require
+    return require('../whatsapp/account').currentAccountId() || '';
+  } catch (_) {
+    return selfPnBare || '';
+  }
+}
+
+function getSelfPn() {
+  return selfPnBare;
+}
+
+/**
+ * Forget everything learned about the previous pairing.
+ *
+ * The LID->PN map is account-specific: it translates a contact's @lid into a
+ * phone number as seen by ONE linked account. Carrying it across a logout let
+ * the old account's mappings keep rewriting the new account's inbound JIDs.
+ * Called from the WhatsApp client's logout path.
+ */
+function clearIdentity() {
+  lidToPn.clear();
+  selfPnBare = null;
+  persistMappings();
+}
+
 function fileNameFor(remoteJid) {
   const resolved = resolveJid(remoteJid);
   if (isGroup(resolved)) {
@@ -457,8 +500,8 @@ function record(remoteJid, opts) {
         const id = msgId || `srv-${ts.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
         const pool = getPool();
         pool.query(
-          `INSERT INTO messages (id, chat_id, direction, body, sender_name, timestamp, is_fallback)
-           VALUES ($1, $2, $3, $4, $5, $6, false)
+          `INSERT INTO messages (id, chat_id, direction, body, sender_name, timestamp, is_fallback, account_jid)
+           VALUES ($1, $2, $3, $4, $5, $6, false, $7)
            ON CONFLICT (id) DO NOTHING`,
           [
             id,
@@ -467,6 +510,7 @@ function record(remoteJid, opts) {
             body || '',
             pushName || null,
             ts,
+            activeAccountId(),
           ]
         ).catch((dbErr) => {
           logger.debug({ err: dbErr.message, msgId: id }, 'Inbox messages-table upsert failed (non-fatal)');
@@ -476,10 +520,10 @@ function record(remoteJid, opts) {
         // updates last_message_at (preserves ai_mode, jid, phone so the
         // operator's per-chat toggle survives).
         pool.query(
-          `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count)
-           VALUES ($1, $1, '', '', $2, 0)
-           ON CONFLICT (id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at`,
-          [remoteJid, ts]
+          `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, account_jid)
+           VALUES ($1, $1, '', '', $2, 0, $3)
+           ON CONFLICT (account_jid, id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at`,
+          [remoteJid, ts, activeAccountId()]
         ).catch((dbErr) => {
           logger.debug({ err: dbErr.message, chatId: remoteJid }, 'Inbox chats-row upsert failed (non-fatal)');
         });
@@ -684,6 +728,8 @@ module.exports = {
   listLidMappings,
   resolveJid,
   setSelfPn,
+  getSelfPn,
+  clearIdentity,
   getRecentHistory,
   // NEW (BUG-DISPATCHER-EPHEMERAL fix, 2026-07-14): exported so the dispatcher
   // at src/index.js can unwrap ephemeralMessage / viewOnce / viewOnceV2 /

@@ -103,6 +103,27 @@ To pair or re-pair, open **WhatsApp Connection** in the left rail
 and status. That route is exempt from the app's auth gate for the obvious
 reason — it is the page you need when the socket is down.
 
+## Switching WhatsApp accounts
+
+Every row in `chats` and `messages` carries an `account_jid` — the operator's
+own number — and every read filters by the currently-paired account. So
+logging out and pairing a different account gives you that account's chats
+only. Nothing is deleted on logout; the old account's history stays in the
+database and reappears if you pair it again.
+
+A contact both accounts have messaged gets one row per account:
+`chats` is keyed on `(account_jid, id)`, not on the contact JID alone.
+
+Logout (**WhatsApp Connection → Logout**) really unlinks the device — it sends
+Baileys' `remove-companion-device`, so the entry disappears from Linked
+Devices on the phone and the local credentials are deleted. Reconnecting needs
+a fresh QR scan, so keep the phone to hand.
+
+`knowledge_chunks.chat_jid` (chat-scoped knowledge) is **not** account-scoped.
+It currently has no rows, so scoping it would be speculative — but if you
+start using chat-scoped KB, it needs the same treatment, because a contact JID
+means different things to different accounts.
+
 ## The embedding model
 
 The sidecar needs `MarcoAland/Indonesian-bge-m3` (~2.2 GB). By default it is

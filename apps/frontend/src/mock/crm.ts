@@ -408,7 +408,7 @@ register('POST', /^\/crm\/knowledge\/files$/, [], async (_params, body) => {
     filename: payload.filename,
     mimeType: payload.mimeType,
     size: payload.size,
-    status: 'pending',
+    status: 'queued',
     chunksCount: 0,
     ingestedAt: null,
     entityId: payload.entityId ?? null,
@@ -427,10 +427,10 @@ register('POST', /^\/crm\/knowledge\/files$/, [], async (_params, body) => {
   setTimeout(() => {
     void chunkFile(inputMeta)
       .then((chunks) => {
-        crmMock.updateKnowledgeFile(id, { status: 'chunked', chunksCount: chunks.length });
+        crmMock.updateKnowledgeFile(id, { status: 'ingesting', chunksCount: chunks.length });
         setTimeout(() => {
           crmMock.updateKnowledgeFile(id, {
-            status: 'embedded',
+            status: 'indexed',
             chunksCount: chunks.length,
             ingestedAt: dayjs().unix(),
           });
@@ -460,15 +460,15 @@ register(
     );
     const file = crmMock.getState().knowledge.find((x) => x.id === id);
     if (!file) return err(404, 'FileNotFound', 'file not found');
-    crmMock.updateKnowledgeFile(id, { status: 'pending', chunksCount: 0, ingestedAt: null });
+    crmMock.updateKnowledgeFile(id, { status: 'queued', chunksCount: 0, ingestedAt: null });
     const inputMeta = { name: file.filename, size: file.size, mimeType: file.mimeType };
     setTimeout(() => {
       void chunkFile(inputMeta)
         .then((chunks) => {
-          crmMock.updateKnowledgeFile(id, { status: 'chunked', chunksCount: chunks.length });
+          crmMock.updateKnowledgeFile(id, { status: 'ingesting', chunksCount: chunks.length });
           setTimeout(() => {
             crmMock.updateKnowledgeFile(id, {
-              status: 'embedded',
+              status: 'indexed',
               chunksCount: chunks.length,
               ingestedAt: dayjs().unix(),
             });

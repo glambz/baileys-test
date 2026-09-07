@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const qrcode = require('qrcode');
 const {
   default: makeWASocket,
@@ -369,26 +370,121 @@ class WhatsAppClient {
     }
   }
 
-  async _clearSession() {
+  /**
+   * Delete the credential files, then reset in-memory session state.
+   *
+   * Removes the CONTENTS of sessionDir rather than the directory itself.
+   * Under Docker sessionDir (/app/auth_info) is a volume mount point, and
+   * `fs.rmSync(mountpoint, {recursive:true})` tries rmdir() first, gets
+   * EBUSY, and throws WITHOUT descending into the children. So the old
+   * version deleted nothing, the throw skipped the state resets below, and
+   * logout() still answered "session cleared" — after which the next
+   * initialize() found creds.json intact and silently re-paired the SAME
+   * account, with no QR ever issued.
+   *
+   * @returns {{cleared: number, failed: string[]}} what was actually removed,
+   *   so the caller can report honestly instead of assuming success.
+   */
+  _clearSessionFiles() {
+    const dir = config.whatsapp.sessionDir;
+    const result = { cleared: 0, failed: [] };
+    let entries = [];
     try {
-      if (fs.existsSync(config.whatsapp.sessionDir)) {
-        fs.rmSync(config.whatsapp.sessionDir, { recursive: true, force: true });
-      }
-      this.user = null;
-      this.lastQR = null;
-      this.lastQRBuffer = null;
-      this._reconnectAttempts = 0;
-      this._wasEverOpen = false;
+      if (!fs.existsSync(dir)) return result;
+      entries = fs.readdirSync(dir);
     } catch (err) {
-      logger.error({ err }, 'Error while clearing session');
+      logger.error({ err, dir }, 'Could not read session dir while clearing');
+      result.failed.push(dir);
+      return result;
     }
+    for (const name of entries) {
+      // Keep the instance lock: it belongs to this running process, and
+      // deleting it would let a second instance start alongside us.
+      if (name === 'server.lock') continue;
+      try {
+        fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+        result.cleared += 1;
+      } catch (err) {
+        logger.error({ err, name }, 'Could not remove session file');
+        result.failed.push(name);
+      }
+    }
+    return result;
   }
 
-  async logout() {
+  async _clearSession() {
+    const files = this._clearSessionFiles();
+    // Reset unconditionally, and AFTER the file work rather than inside its
+    // try block, so a filesystem failure can no longer leave this.user
+    // reporting the account we just logged out of.
+    this.user = null;
+    this.lastQR = null;
+    this.lastQRBuffer = null;
+    this._reconnectAttempts = 0;
+    this._wasEverOpen = false;
+    return files;
+  }
+
+  /**
+   * Log out: unlink this device from WhatsApp, wipe the local session, and
+   * forget the account's learned identity.
+   *
+   * Order matters. Baileys' sock.logout() sends `remove-companion-device`
+   * over the live socket, so it has to run BEFORE the socket is torn down —
+   * otherwise the device stays listed under Linked Devices on the phone and
+   * only the local copy is discarded. That was the previous behaviour: this
+   * method never called Baileys' logout at all.
+   *
+   * @param {{unlinkDevice?: boolean}} [opts] pass unlinkDevice:false to keep
+   *   the device paired and only drop the local session.
+   */
+  async logout(opts) {
+    const unlinkDevice = !opts || opts.unlinkDevice !== false;
+    let deviceUnlinked = false;
+    let unlinkError = null;
+
+    if (unlinkDevice && this.sock && this.isConnected()) {
+      try {
+        await this.sock.logout();
+        deviceUnlinked = true;
+      } catch (err) {
+        // A failed unlink must not block the local wipe — otherwise a
+        // network blip leaves the operator unable to switch accounts.
+        unlinkError = String((err && err.message) || err);
+        logger.warn({ err }, 'WhatsApp device unlink failed; clearing locally anyway');
+      }
+    }
+
     await this._teardownSocket();
-    await this._clearSession();
+    const files = await this._clearSession();
+
+    // The LID->PN map and the stored self number describe the account that
+    // just left. Keeping them let the old account's mappings rewrite the new
+    // account's inbound JIDs after re-pairing.
+    try {
+      inbox.clearIdentity();
+    } catch (err) {
+      logger.warn({ err }, 'Could not clear inbox identity on logout');
+    }
+
     this.state = CONNECTION_STATES.CLOSE;
-    return { message: 'Logged out and session cleared' };
+
+    const sessionCleared = files.failed.length === 0;
+    return {
+      // Report what happened rather than a fixed success string. The old
+      // hardcoded "Logged out and session cleared" was returned even when
+      // nothing had been deleted.
+      message: sessionCleared
+        ? (deviceUnlinked
+          ? 'Logged out, device unlinked, and local session cleared.'
+          : 'Local session cleared. The device may still appear under Linked Devices.')
+        : 'Logout incomplete: some session files could not be removed.',
+      deviceUnlinked,
+      sessionCleared,
+      filesRemoved: files.cleared,
+      filesFailed: files.failed,
+      unlinkError,
+    };
   }
 
   async shutdown() {

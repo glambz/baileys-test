@@ -3,21 +3,70 @@ import { apiClient } from '@/lib/apiClient';
 import { z } from 'zod';
 import type { KnowledgeFile } from '@/types/crm';
 
-const FileSchema = z.object({
+/**
+ * Normalise a timestamp to epoch SECONDS, which is what `KnowledgeFile`
+ * declares and what the page renders with `dayjs.unix()`.
+ *
+ * The real backend sends ISO strings (`created_at` straight out of Postgres)
+ * while the mock layer sends epoch seconds. Feeding an ISO string to
+ * dayjs.unix() rendered every row's Uploaded column as "Invalid Date".
+ * Milliseconds are tolerated too, since that is the other shape a JS
+ * backend tends to emit.
+ */
+function toEpochSeconds(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return null;
+    // Anything past ~5138-11-16 in seconds is really milliseconds.
+    return v > 1e11 ? Math.floor(v / 1000) : Math.floor(v);
+  }
+  const parsed = Date.parse(String(v));
+  return Number.isNaN(parsed) ? null : Math.floor(parsed / 1000);
+}
+
+/**
+ * The wire shape, kept deliberately loose, then transformed into the
+ * canonical `KnowledgeFile`. This used to be a narrow object cast with
+ * `as unknown as z.ZodType<KnowledgeFile>` — the cast asserted a shape the
+ * data did not have, which is what let three separate mismatches through:
+ * the status vocabulary, ISO-vs-epoch timestamps, and lastError vs
+ * errorMessage.
+ */
+const FileWireSchema = z.object({
   id: z.string(),
   filename: z.string(),
   mimeType: z.string(),
   size: z.number(),
-  // The BE's knowledge_files.status CHECK includes 'queued','indexed','failed'.
-  // The FE's previous enum omitted 'indexed' (the success state!) — every
-  // indexed file threw a zod parse error.
+  // Left as a string rather than an enum so a status the FE has not been
+  // taught about degrades to an unknown chip instead of failing the parse
+  // and blanking the page. StatusChip resolves it with a fallback.
   status: z.string(),
   chunksCount: z.number(),
   ingestedAt: z.union([z.number(), z.string(), z.null()]).optional(),
+  // The BE column is `last_error` and the route serialises it as `lastError`;
+  // the FE calls it `errorMessage`. Accept both so the failure tooltip
+  // actually receives the message.
   errorMessage: z.string().nullable().optional(),
+  lastError: z.string().nullable().optional(),
   entityId: z.string().nullable().optional(),
-  uploadedAt: z.union([z.number(), z.string()]).optional(),
-}) as unknown as z.ZodType<KnowledgeFile>;
+  uploadedAt: z.union([z.number(), z.string(), z.null()]).optional(),
+});
+
+const FileSchema = FileWireSchema.transform(
+  (raw): KnowledgeFile => ({
+    id: raw.id,
+    filename: raw.filename,
+    mimeType: raw.mimeType,
+    size: raw.size,
+    status: raw.status as KnowledgeFile['status'],
+    chunksCount: raw.chunksCount,
+    ingestedAt: toEpochSeconds(raw.ingestedAt),
+    errorMessage: raw.errorMessage ?? raw.lastError ?? null,
+    entityId: raw.entityId ?? null,
+    // 0 means "unknown"; the page renders a dash rather than 1970.
+    uploadedAt: toEpochSeconds(raw.uploadedAt) ?? 0,
+  })
+);
 
 const ListResponse = z.object({ files: z.array(FileSchema) });
 
@@ -29,7 +78,7 @@ export function useKnowledgeFiles(entityId?: string) {
         ? `/crm/knowledge/files?entityId=${encodeURIComponent(entityId)}`
         : `/crm/knowledge/files`;
       const raw = await apiClient<unknown>(url);
-      return ListResponse.parse(raw).files as KnowledgeFile[];
+      return ListResponse.parse(raw).files;
     },
   });
 }
@@ -43,7 +92,7 @@ export function useUploadKnowledgeFile() {
         body: JSON.stringify(body),
       });
       const resp = z.object({ file: FileSchema }).parse(raw);
-      return resp.file as KnowledgeFile;
+      return resp.file;
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['crm', 'knowledge'] });

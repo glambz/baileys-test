@@ -7,6 +7,7 @@
  * to frontend/src/types/crm.ts:7 and to the SQL CHECK constraint.
  */
 const { getPool } = require('../../db/client');
+const { currentAccountId } = require('../../whatsapp/account');
 
 class ForbiddenTransitionError extends Error {
   constructor(fromMode, toMode) {
@@ -49,8 +50,8 @@ function assertTransitionAllowed(fromMode, toMode) {
 async function loadChatMode(chatId) {
   const pool = getPool();
   const r = await pool.query(
-    'SELECT ai_mode FROM chats WHERE id = $1',
-    [chatId]
+    'SELECT ai_mode FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
   );
   if (r.rows.length === 0) throw new ChatNotFoundError(chatId);
   return r.rows[0].ai_mode;
@@ -59,8 +60,8 @@ async function loadChatMode(chatId) {
 async function loadChatContactId(chatId) {
   const pool = getPool();
   const r = await pool.query(
-    'SELECT contact_id FROM chats WHERE id = $1',
-    [chatId]
+    'SELECT contact_id FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
   );
   if (r.rows.length === 0) throw new ChatNotFoundError(chatId);
   return r.rows[0].contact_id;
@@ -88,10 +89,14 @@ async function upsertChatOnInbound(chatId, opts) {
   const phone = opts.phone || null;
   const lastMessageAt = opts.lastMessageAt || Math.floor(Date.now() / 1000);
   await pool.query(
-    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count)
-     VALUES ($1, $1, $2, '', $3, 0)
-     ON CONFLICT (id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at`,
-    [chatId, phone, lastMessageAt]
+    // ON CONFLICT now targets the composite key. With the old
+    // `ON CONFLICT (id)`, a contact both linked accounts had messaged
+    // collided on one row and kept the first account's ai_mode and
+    // conversation_summary.
+    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, account_jid)
+     VALUES ($1, $1, $2, '', $3, 0, $4)
+     ON CONFLICT (account_jid, id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at`,
+    [chatId, phone, lastMessageAt, currentAccountId() || '']
   );
 }
 
@@ -101,12 +106,15 @@ async function transitionChatMode(chatId, fromMode, toMode, reason) {
   assertTransitionAllowed(fromMode, toMode);
   const pool = getPool();
   const r = await pool.query(
-    `UPDATE chats SET ai_mode = $1 WHERE id = $2 AND ai_mode = $3 RETURNING ai_mode`,
-    [toMode, chatId, fromMode]
+    `UPDATE chats SET ai_mode = $1 WHERE id = $2 AND ai_mode = $3 AND account_jid = $4 RETURNING ai_mode`,
+    [toMode, chatId, fromMode, currentAccountId() || '']
   );
   if (r.rows.length === 0) {
     // Either chat doesn't exist or mode has changed underneath us.
-    const cur = await pool.query('SELECT ai_mode FROM chats WHERE id = $1', [chatId]);
+    const cur = await pool.query(
+      'SELECT ai_mode FROM chats WHERE id = $1 AND account_jid = $2',
+      [chatId, currentAccountId() || '']
+    );
     if (cur.rows.length === 0) throw new ChatNotFoundError(chatId);
     throw new ForbiddenTransitionError(cur.rows[0].ai_mode, toMode);
   }

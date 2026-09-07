@@ -6,15 +6,27 @@ import {
   Loader2,
   Plug,
   QrCode,
+  LogOut,
   RefreshCw,
   Smartphone,
   XCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useAuthInit } from '@/hooks/useAuthInit';
 import { useAuthStatus } from '@/hooks/useAuthStatus';
 import { useAuthQr, type AuthQrResult } from '@/hooks/useAuthQr';
+import { useAuthLogout, type AuthLogoutResult } from '@/hooks/useAuthLogout';
 import type { AuthStatus } from '@/types';
 import { cn } from '@/lib/utils';
 
@@ -129,12 +141,16 @@ export default function WhatsAppConnectionPage() {
   const statusQuery = useAuthStatus();
   const init = useAuthInit();
   const qr = useAuthQr();
+  const logout = useAuthLogout();
 
   const [initMessage, setInitMessage] = useState<string | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [qrResult, setQrResult] = useState<AuthQrResult | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
   const [statusCheckedAt, setStatusCheckedAt] = useState<string | null>(null);
+  const [logoutResult, setLogoutResult] = useState<AuthLogoutResult | null>(null);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const status = statusQuery.data;
   const state: ConnState = (status?.state as ConnState) ?? 'close';
@@ -169,6 +185,24 @@ export default function WhatsAppConnectionPage() {
   const handleCheckStatus = async () => {
     await statusQuery.refetch();
     setStatusCheckedAt(new Date().toLocaleTimeString());
+  };
+
+  const handleLogout = async () => {
+    setConfirmLogout(false);
+    setLogoutError(null);
+    setLogoutResult(null);
+    try {
+      const res = await logout.mutateAsync();
+      setLogoutResult(res);
+      // Clear the stale QR panel: any QR shown belonged to the session that
+      // just ended, and the chat caches now belong to no account.
+      setQrResult(null);
+      await qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+      await qc.invalidateQueries({ queryKey: ['chats'] });
+      await qc.invalidateQueries({ queryKey: ['crm', 'chats', 'modes'] });
+    } catch (err) {
+      setLogoutError((err as Error).message);
+    }
   };
 
   return (
@@ -366,11 +400,103 @@ export default function WhatsAppConnectionPage() {
           </Card>
         </div>
 
+        {/* 4 — Logout. Separated from the grid above because it is the only
+            destructive action here: it unlinks the device, so getting back in
+            needs physical access to the phone. */}
+        <Card className="border-destructive/30">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <LogOut aria-hidden className="h-4 w-4 text-destructive" />
+              Logout
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Memutus tautan perangkat ini dari WhatsApp dan menghapus kredensial lokal.
+              Entri di <strong>Perangkat Tertaut</strong> akan hilang, jadi untuk menyambung
+              lagi Anda perlu memindai QR baru dari HP.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Riwayat chat di database <strong>tidak dihapus</strong>. Setiap baris terikat ke
+              akun yang menulisnya, jadi memasang akun lain akan menampilkan chat akun itu
+              saja — bukan gabungan keduanya.
+            </p>
+            <Button
+              variant="destructive"
+              onClick={() => setConfirmLogout(true)}
+              disabled={logout.isPending}
+              aria-busy={logout.isPending}
+            >
+              {logout.isPending ? (
+                <>
+                  <Loader2 aria-hidden className="mr-1.5 h-4 w-4 animate-spin" />
+                  Memutus tautan…
+                </>
+              ) : (
+                <>
+                  <LogOut aria-hidden className="mr-1.5 h-4 w-4" />
+                  Logout &amp; putuskan tautan
+                </>
+              )}
+            </Button>
+
+            {logoutResult && (
+              <Outcome tone={logoutResult.sessionCleared === false ? 'warn' : 'ok'}>
+                <p className="font-medium">{logoutResult.message}</p>
+                <ul className="list-inside list-disc">
+                  <li>
+                    Perangkat ter-unlink:{' '}
+                    {logoutResult.deviceUnlinked ? 'ya' : 'tidak'}
+                  </li>
+                  <li>
+                    Sesi lokal terhapus:{' '}
+                    {logoutResult.sessionCleared ? 'ya' : 'tidak'}
+                    {typeof logoutResult.filesRemoved === 'number' &&
+                      ` (${logoutResult.filesRemoved} file)`}
+                  </li>
+                </ul>
+                {logoutResult.unlinkError && (
+                  <p className="text-muted-foreground">
+                    Catatan unlink: {logoutResult.unlinkError}
+                  </p>
+                )}
+              </Outcome>
+            )}
+            {logoutError && (
+              <Outcome tone="error">
+                <p className="font-medium">Gagal logout</p>
+                <p>{logoutError}</p>
+              </Outcome>
+            )}
+          </CardContent>
+        </Card>
+
+        <AlertDialog open={confirmLogout} onOpenChange={setConfirmLogout}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Putuskan tautan perangkat ini?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Perangkat ini akan dihapus dari daftar Perangkat Tertaut di WhatsApp dan
+                kredensial lokal dihapus. Untuk menyambung lagi Anda perlu memindai QR
+                baru — jadi pastikan HP-nya ada di dekat Anda. Riwayat chat di database
+                tetap tersimpan.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Batal</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleLogout()}>
+                Ya, logout
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         <p className="text-[11px] text-muted-foreground">
           Endpoint:{' '}
           <code className="rounded bg-secondary px-1 py-0.5">POST /api/auth/init</code>,{' '}
           <code className="rounded bg-secondary px-1 py-0.5">GET /api/auth/qr.json</code>,{' '}
-          <code className="rounded bg-secondary px-1 py-0.5">GET /api/auth/status</code>.
+          <code className="rounded bg-secondary px-1 py-0.5">GET /api/auth/status</code>,{' '}
+          <code className="rounded bg-secondary px-1 py-0.5">POST /api/auth/logout</code>.
           Status juga ikut ter-refresh otomatis tiap 30 detik.
         </p>
       </div>

@@ -19,6 +19,7 @@
  */
 const { getPool } = require('../../db/client');
 const { createChatCompletion } = require('../llm');
+const { currentAccountId } = require('../../whatsapp/account');
 
 const MIN_REFRESH_SECONDS = Number(process.env.SUMMARY_MIN_REFRESH_SECONDS || 600); // 10 min
 const MAX_CONTEXT_MESSAGES = Number(process.env.SUMMARY_MAX_CONTEXT_MESSAGES || 30);
@@ -50,8 +51,8 @@ async function loadChatSummary(chatId) {
   if (!chatId) return '';
   const pool = getPool();
   const r = await pool.query(
-    'SELECT conversation_summary FROM chats WHERE id = $1',
-    [chatId]
+    'SELECT conversation_summary FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
   );
   return r.rows.length > 0 ? (r.rows[0].conversation_summary || '') : '';
 }
@@ -61,8 +62,8 @@ async function maybeUpdateSummary(chatId, tenantId, opts) {
   if (!chatId) return;
   const pool = getPool();
   const r = await pool.query(
-    'SELECT summary_updated_at FROM chats WHERE id = $1',
-    [chatId]
+    'SELECT summary_updated_at FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
   );
   const lastUpdate = r.rows.length > 0 ? Number(r.rows[0].summary_updated_at || 0) : 0;
   const now = nowSec();
@@ -83,10 +84,10 @@ async function updateChatSummary(chatId, tenantId) {
   const r = await pool.query(
     `SELECT id, direction, body, timestamp
        FROM messages
-      WHERE chat_id = $1
+      WHERE chat_id = $1 AND account_jid = $3
       ORDER BY timestamp DESC
       LIMIT $2`,
-    [chatId, MAX_CONTEXT_MESSAGES]
+    [chatId, MAX_CONTEXT_MESSAGES, currentAccountId() || '']
   );
   if (r.rows.length === 0) return;
   const lines = [];
@@ -127,8 +128,8 @@ async function updateChatSummary(chatId, tenantId) {
     `UPDATE chats
         SET conversation_summary = $1,
             summary_updated_at    = $2
-      WHERE id = $3`,
-    [summaryText, nowSec(), chatId]
+      WHERE id = $3 AND account_jid = $4`,
+    [summaryText, nowSec(), chatId, currentAccountId() || '']
   );
 }
 

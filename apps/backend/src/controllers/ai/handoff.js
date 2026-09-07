@@ -24,6 +24,7 @@ const { loadChatMode, ChatNotFoundError } = require('../../ai/whatsapp/handoff')
 const { loadChatSummary } = require('../../ai/settings/summary');
 const { loadEscalationBriefing } = require('../../ai/settings/escalation');
 const audit = require('../../ai/audit/log');
+const { currentAccountId } = require('../../whatsapp/account');
 
 const QuerySchema = z.object({
   chatId: z.string().min(1),
@@ -121,16 +122,16 @@ async function handler(req, res, next) {
     const [metaRes, msgRes] = await Promise.all([
       pool.query(
         `SELECT phone, last_message_at, summary_updated_at
-           FROM chats WHERE id = $1`,
-        [chatId],
+           FROM chats WHERE id = $1 AND account_jid = $2`,
+        [chatId, currentAccountId() || ''],
       ).catch(() => ({ rows: [] })),
       pool.query(
         `SELECT id, direction, body, timestamp
            FROM messages
-          WHERE chat_id = $1
+          WHERE chat_id = $1 AND account_jid = $3
           ORDER BY timestamp DESC
           LIMIT $2`,
-        [chatId, LAST_MESSAGES_COUNT],
+        [chatId, LAST_MESSAGES_COUNT, currentAccountId() || ''],
       ).catch(() => ({ rows: [] })),
     ]);
 

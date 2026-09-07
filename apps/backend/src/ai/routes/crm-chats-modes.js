@@ -15,6 +15,7 @@
 const { Router } = require('express');
 const { requireTenant } = require('./_middleware');
 const { getPool } = require('../../db/client');
+const { currentAccountId } = require('../../whatsapp/account');
 
 const router = Router();
 router.use(requireTenant);
@@ -22,7 +23,12 @@ router.use(requireTenant);
 router.get('/modes', async (_req, res, next) => {
   try {
     const pool = getPool();
-    const r = await pool.query(`SELECT id, ai_mode FROM chats`);
+    const r = await pool.query(
+      // Account-scoped: without the filter this returned every linked
+      // account's chats and the FE keyed modes by contact JID alone.
+      `SELECT id, ai_mode FROM chats WHERE account_jid = $1`,
+      [currentAccountId() || '']
+    );
     const modes = {};
     for (const row of r.rows) {
       const m = row.ai_mode;
