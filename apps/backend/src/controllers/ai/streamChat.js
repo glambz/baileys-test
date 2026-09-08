@@ -1,34 +1,36 @@
 'use strict';
 /**
- * POST /api/ai/chat — streaming AI chat endpoint for the in-app workspace.
- * Source: docs/specs/2026-08-18-in-app-ai-chat-polish.md
+ * POST /api/crm/ai/chat — streaming AI chat for the in-app workspace.
  *
- * Wire protocol (SSE):
- *   event: tool      { name, input, resultCount }
+ * This is the INTERNAL assistant, and it is a different function from the
+ * WhatsApp auto-reply. It used to be the same one wearing a different URL:
+ * it borrowed the auto-reply's system prompt (which forbids general
+ * reasoning and mandates a locked customer apology), gated on
+ * `settings.whatsappAutoReply.confidenceThreshold` — the CUSTOMER-facing
+ * setting — and on a low score replaced the answer with that literal
+ * Indonesian apology, shown to internal staff. It also saw only knowledge-base
+ * vector hits, so questions like "how many invoices over 5 million" or
+ * "which chats are waiting on a human" were structurally unanswerable.
+ *
+ * It now runs the tool agent at INTERNAL scope: read-only access to every
+ * entity, record, conversation and message belonging to the connected
+ * account, including aggregates. No confidence gate and no customer
+ * fallback — when the data is absent it says so.
+ *
+ * Wire protocol (SSE), unchanged so the FE needs no migration:
+ *   event: tool      { name, input, resultCount, why?, error? }
  *   event: chunk     { delta }
- *   event: done      { answer, confidence, evidence }
+ *   event: done      { answer, confidence, grounded, evidence, kind }
  *   event: error     { message }
- *
- * The existing LLM gateway returns a single { content } payload, not a
- * stream. We simulate streaming by chunking the final answer into
- * delta-sized pieces. This keeps the wire shape stable so the FE can
- * be upgraded to a real stream (Vercel AI SDK 5) later without changes.
  */
 const { z } = require('zod');
 const { attachSse } = require('../../api/stream');
-const { getSettings } = require('../../ai/settings/store');
-const { hybridRetrieval } = require('../../ai/retrieval/hybrid');
 const llm = require('../../ai/llm');
-const {
-  BAILEYS_AI_SYSTEM_PROMPT_ID,
-  BAILEYS_AI_SYSTEM_PROMPT_EN,
-} = require('../../ai/llm/base-prompts');
-const { buildSystemPrompt } = require('../../ai/settings/composer');
+const { runInternalChat } = require('../../ai/chat/internalAgent');
+const { SCOPE_INTERNAL } = require('../../ai/tools/dbTools');
 const audit = require('../../ai/audit/log');
-const { AI_FALLBACK_MESSAGE_ID } = require('../../i18n/ai-fallback');
 
-// Test hook: tests inject a stub via this setter to avoid hitting the
-// real LLM gateway. Production code never calls this.
+// Test hook: tests inject a stub so they never reach the real gateway.
 let _llmOverride = null;
 function setLlmForTesting(override) {
   _llmOverride = override;
@@ -39,15 +41,21 @@ function getLlm() {
 
 const BodySchema = z.object({
   question: z.string().min(3).max(500),
-  history: z.array(z.object({
-    role: z.enum(['user', 'assistant']),
-    content: z.string(),
-  })).max(20).optional(),
+  history: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string(),
+      })
+    )
+    .max(20)
+    .optional(),
   topK: z.number().int().min(1).max(10).optional(),
 });
 
-// Simulated-stream chunk size. Real byte streams can be 1-N chars;
-// we keep small deltas so the FE sees a smooth animation.
+// The gateway returns one payload, not a stream, so the answer is chunked
+// here. Small deltas keep the FE animation smooth, and the wire shape stays
+// stable for a future real stream.
 const DELTA_CHARS = 4;
 const HEARTBEAT_MS = 15_000;
 
@@ -67,68 +75,37 @@ async function streamChatHandler(req, res, next) {
       sse.send('error', { message: 'ValidationError', issues: parsed.error.issues });
       return;
     }
-    const { question, history = [], topK = 5 } = parsed.data;
+    const { question, history = [] } = parsed.data;
     const tenantId = req.tenantId || 'default';
     const sse = attachSse(res, { heartbeatMs: HEARTBEAT_MS });
 
-    // If the client disconnects mid-stream, abort the LLM call.
+    // 'close' on the RESPONSE is the disconnect signal; the request's own
+    // 'close' fires once the body is read and is not a disconnect.
     let aborted = false;
-    // res.on('close') is the right event: the EXPRESS response writes have
-    // started, and 'close' fires when the underlying socket ends. The
-    // request's 'close' event fires earlier (when the request body is
-    // fully read) and is not actually a disconnect signal.
     res.on('close', () => {
       aborted = true;
     });
 
-    const settings = await getSettings();
-    const basePrompt = settings.language === 'en' ? BAILEYS_AI_SYSTEM_PROMPT_EN : BAILEYS_AI_SYSTEM_PROMPT_ID;
-    const systemPrompt = buildSystemPrompt({
-      settings,
-      tenantName: 'Tenant',
-      language: settings.language,
-      basePrompt,
-    });
-
-    // Tool event: retrieval. We call team-scope retrieval (in-app chat sees
-    // everything). Emit a tool event the FE can render as a chip.
-    const { chunks, retrievalScore } = await hybridRetrieval({
-      query: question,
-      scope: 'team',
-      chatId: null, // Spec 1: team scope = opt out of chat filter.
-      topK,
-    });
-    if (aborted) return sse.end();
-    sse.send('tool', {
-      name: 'hybridRetrieval',
-      input: { query: question, scope: 'team', topK },
-      resultCount: chunks.length,
-      retrievalScore,
-    });
-
-    const userPrompt = getLlm().buildUserPrompt({
-      question,
-      contextChunks: chunks,
-      chatHistory: history,
-      contactPhone: undefined,
-    });
-
-    let parsedResult;
+    let result;
     try {
-      const activeLlm = getLlm();
-      const r = await activeLlm.createChatCompletion({
-        systemPrompt,
-        userPrompt,
-        jsonSchema: { name: 'rag_answer', schema: { type: 'object', additionalProperties: true } },
+      result = await runInternalChat({
+        question,
+        history,
+        llm: getLlm(),
+        scope: { mode: SCOPE_INTERNAL },
+        isAborted: () => aborted,
+        // Emit each tool call as it happens. The FE already renders these as
+        // chips through ToolCallCard, so progress is visible mid-answer.
+        onTool: (evt) => {
+          sse.send('tool', {
+            name: evt.name,
+            input: evt.input,
+            resultCount: evt.resultCount,
+            why: evt.why,
+            error: evt.error,
+          });
+        },
       });
-      const parsedR = await activeLlm.parseStructuredOutput({
-        rawText: r.content,
-        schema: activeLlm.RagAnswerSchema,
-        llmClient: { createChatCompletion: activeLlm.createChatCompletion },
-        systemPrompt,
-        userPrompt,
-      });
-      parsedResult = parsedR.parsed;
     } catch (err) {
       await audit.write('stream_chat_error', { tenantId, error: String(err.message) });
       sse.send('error', { message: 'LlmError', reason: String(err.message) });
@@ -136,52 +113,53 @@ async function streamChatHandler(req, res, next) {
     }
     if (aborted) return sse.end();
 
-    // Below the confidence threshold -> emit a fallback answer (no chunks).
-    const confThresh = settings.whatsappAutoReply?.confidenceThreshold ?? 0.3;
-    if (parsedResult.fallback_used || parsedResult.confidence < confThresh) {
-      sse.send('tool', { name: 'fallback', input: { reason: 'low_confidence' }, resultCount: 0 });
-      sse.send('done', {
-        answer: AI_FALLBACK_MESSAGE_ID,
-        confidence: parsedResult.confidence,
-        evidence: [],
-        kind: 'fallback',
-        generatedAt: Date.now(),
-      });
-      await audit.write('stream_chat_fallback', { tenantId, confidence: parsedResult.confidence });
-      return;
-    }
-
-    // Stream the assembled answer as delta chunks.
-    const answer = String(parsedResult.answer || '');
-    const deltas = chunkString(answer, DELTA_CHARS);
-    for (const d of deltas) {
+    const answer = String(result.answer || '');
+    for (const d of chunkString(answer, DELTA_CHARS)) {
       if (aborted) break;
       sse.send('chunk', { delta: d });
     }
 
-    const evidence = (parsedResult.citations || []).map((marker, i) => {
-      const c = chunks[marker - 1] || chunks[i];
-      return {
-        kind: 'kb',
-        entryId: c && c.chunk && c.chunk.id,
-        excerpt: c && c.chunk && c.chunk.text ? c.chunk.text.slice(0, 300) : '',
-        source: (c && c.chunk && c.chunk.metadata && c.chunk.metadata.file) || 'kb',
-        confidence: parsedResult.confidence,
-      };
-    });
+    // Evidence is the tool trail rather than citation markers: for an
+    // internal answer, what matters is which queries it was built from.
+    const evidence = result.toolCalls.map((t) => ({
+      kind: 'tool',
+      entryId: t.name,
+      excerpt: t.why || `${t.name}(${JSON.stringify(t.input).slice(0, 160)})`,
+      source: t.name,
+      confidence: result.grounded ? 1 : 0,
+    }));
 
     sse.send('done', {
       answer,
-      confidence: parsedResult.confidence,
+      // `grounded` is the useful signal for an internal tool — "did this come
+      // from your data?" — where the old self-reported float was being used
+      // to suppress answers outright. Kept as `confidence` too so the
+      // existing FE contract still parses.
+      confidence: result.grounded ? 1 : 0,
+      grounded: result.grounded,
       evidence,
       kind: 'answered',
       generatedAt: Date.now(),
     });
-    await audit.write('stream_chat_sent', { tenantId, confidence: parsedResult.confidence, retrievalScore });
+
+    await audit.write('stream_chat_answered', {
+      tenantId,
+      grounded: result.grounded,
+      rounds: result.rounds,
+      tools: result.toolCalls.map((t) => t.name),
+    });
   } catch (err) {
     if (res.headersSent) {
-      try { res.write(`event: error\ndata: ${JSON.stringify({ message: String(err.message) })}\n\n`); } catch (_) {}
-      try { res.end(); } catch (_) {}
+      try {
+        res.write(`event: error\ndata: ${JSON.stringify({ message: String(err.message) })}\n\n`);
+      } catch (_) {
+        /* the socket is already gone */
+      }
+      try {
+        res.end();
+      } catch (_) {
+        /* ditto */
+      }
       return;
     }
     return next(err);

@@ -8,6 +8,7 @@
  */
 const { getPool } = require('../../db/client');
 const { currentAccountId } = require('../../whatsapp/account');
+const { contactPhoneFromChatId } = require('../tools/dbTools');
 
 class ForbiddenTransitionError extends Error {
   constructor(fromMode, toMode) {
@@ -58,13 +59,23 @@ async function loadChatMode(chatId) {
 }
 
 async function loadChatContactId(chatId) {
+  // `chats` has no contact_id column and never did — this selected a column
+  // that does not exist, so it threw for every chat. Its only caller
+  // (controllers/ai/replyPreview.js) wraps it in `.catch(() => null)`, which
+  // means the preview has silently run with NO contact scope since it was
+  // written: the retrieval it drives was seeing every contact's records.
+  //
+  // The contact identity comes off the JID, the same way the tool layer
+  // derives it, because `chats.phone` is unreliable (some rows '' and others
+  // '+6289...'). The row lookup stays so an unknown chat still raises
+  // ChatNotFoundError rather than silently scoping to nothing.
   const pool = getPool();
   const r = await pool.query(
-    'SELECT contact_id FROM chats WHERE id = $1 AND account_jid = $2',
+    'SELECT phone FROM chats WHERE id = $1 AND account_jid = $2',
     [chatId, currentAccountId() || '']
   );
   if (r.rows.length === 0) throw new ChatNotFoundError(chatId);
-  return r.rows[0].contact_id;
+  return contactPhoneFromChatId(chatId) || contactPhoneFromChatId(r.rows[0].phone);
 }
 
 /**

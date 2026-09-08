@@ -58,14 +58,28 @@ async function hybridRetrieval(opts) {
   let recordBm25Hits = [];
   let recordAnnHits = [];
   const recordTenantId = opts.tenantId || null;
+  // Under whatsapp scope a record must belong to THIS contact (or be
+  // tenant-wide). Passing null here — which is what happened before — meant
+  // no contact restriction at all on the customer-facing path.
+  const recordContact = scope === 'whatsapp' ? contactPhone || null : null;
   try {
-    recordBm25Hits = await bm25SearchRecords({ query, limit: 20, tenantId: recordTenantId });
+    recordBm25Hits = await bm25SearchRecords({
+      query,
+      limit: 20,
+      tenantId: recordTenantId,
+      contactPhone: recordContact,
+    });
   } catch (_) {
     recordBm25Hits = [];
   }
   if (qEmb) {
     try {
-      recordAnnHits = await annSearchRecords({ queryEmbedding: qEmb, limit: 20, tenantId: recordTenantId });
+      recordAnnHits = await annSearchRecords({
+        queryEmbedding: qEmb,
+        limit: 20,
+        tenantId: recordTenantId,
+        contactPhone: recordContact,
+      });
     } catch (_) {
       recordAnnHits = [];
     }

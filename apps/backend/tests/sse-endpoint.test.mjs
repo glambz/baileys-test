@@ -28,11 +28,20 @@ async function getSse(port, chatId) {
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toMatch(/^text\/event-stream/);
       const chunks = [];
+      const finish = () => resolve(Buffer.concat(chunks).toString('utf8'));
       res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-      res.on('error', reject);
+      res.on('end', finish);
+      // An SSE response never ends on its own, so the 1.5s destroy below IS
+      // this test's cancellation. That surfaces as `Error: aborted` on the
+      // response stream, which was wired straight into reject() — so the
+      // test failed on its own cancellation, every run, no matter how the
+      // endpoint behaved. Deliberate cancellation resolves with what we
+      // collected; anything else is still a real error.
+      res.on('aborted', finish);
+      res.on('close', finish);
+      res.on('error', (err) => (err && err.code === 'ECONNRESET' ? finish() : reject(err)));
     });
-    req.on('error', reject);
+    req.on('error', (err) => (err && err.code === 'ECONNRESET' ? undefined : reject(err)));
     req.end();
     // Cancel after 1.5s — we'll have enough chunks by then.
     setTimeout(() => req.destroy(), 1500);

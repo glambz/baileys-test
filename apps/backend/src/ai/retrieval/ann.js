@@ -41,7 +41,7 @@ async function annSearch({ queryEmbedding, limit = 20, chatJid = null }) {
  * fuse both branches through one RRF pass. `fileId` is null for records;
  * `metadata.recordId` identifies the source row.
  */
-async function annSearchRecords({ queryEmbedding, limit = 20, tenantId = null }) {
+async function annSearchRecords({ queryEmbedding, limit = 20, tenantId = null, contactPhone = null }) {
   const pool = getPool();
   const vecLiteral = Array.isArray(queryEmbedding)
     ? `[${queryEmbedding.join(',')}]`
@@ -52,9 +52,19 @@ async function annSearchRecords({ queryEmbedding, limit = 20, tenantId = null })
      FROM record_embeddings
      WHERE embedding IS NOT NULL
        AND ($3::text IS NULL OR tenant_id = $3)
+       -- Contact scope. A record belongs to a contact via
+       -- entity_records.contact_id; NULL means tenant-wide (a price list, say)
+       -- and stays visible, mirroring how knowledge_chunks.chat_jid IS NULL
+       -- means "global". Without this the auto-reply serving one customer
+       -- could retrieve another customer's records.
+       AND ($4::text IS NULL OR EXISTS (
+             SELECT 1 FROM entity_records er
+              WHERE er.id = record_embeddings.record_id
+                AND (er.contact_id = $4 OR er.contact_id IS NULL)
+           ))
      ORDER BY embedding <=> $1::vector
      LIMIT $2`,
-    [vecLiteral, limit, tenantId]
+    [vecLiteral, limit, tenantId, contactPhone]
   );
   return r.rows.map((row) => ({
     chunk: {

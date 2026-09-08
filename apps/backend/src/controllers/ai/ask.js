@@ -1,18 +1,28 @@
 'use strict';
 /**
- * POST /api/crm/ai/ask — team scope, no contact filter.
- * Source: docs/crm/plans/21-rest-endpoints.md + Plan 21 controller ask.js.
+ * POST /api/crm/ai/ask — the internal knowledge assistant, non-streaming.
+ *
+ * Same function as POST /api/crm/ai/chat, without SSE: it is for internal
+ * staff, and it is NOT the WhatsApp auto-reply. It used to be exactly that,
+ * though — it borrowed the customer persona prompt (answer only from the
+ * CONTEXT block, cite [n], otherwise emit the locked Indonesian apology),
+ * gated on `settings.whatsappAutoReply.confidenceThreshold` (the
+ * CUSTOMER-facing setting), and on a low score returned that apology to
+ * staff. It also saw only knowledge-base vector hits, so "how many invoices
+ * over 5 million" was structurally unanswerable.
+ *
+ * It now runs the read-only tool agent at internal scope: every entity,
+ * record, conversation and message of the connected account, aggregates
+ * included. No confidence gate, no customer fallback — when the data is
+ * absent it says so.
+ *
+ * Response shape is unchanged so the FE needs no migration.
  */
 const { z } = require('zod');
-const { getSettings } = require('../../ai/settings/store');
-const { hybridRetrieval } = require('../../ai/retrieval/hybrid');
-const { createChatCompletion, buildUserPrompt, parseStructuredOutput } = require('../../ai/llm');
-const { BAILEYS_AI_SYSTEM_PROMPT_ID, BAILEYS_AI_SYSTEM_PROMPT_EN } = require('../../ai/llm/base-prompts');
-const { buildSystemPrompt } = require('../../ai/settings/composer');
+const llm = require('../../ai/llm');
+const { runInternalChat } = require('../../ai/chat/internalAgent');
+const { SCOPE_INTERNAL } = require('../../ai/tools/dbTools');
 const audit = require('../../ai/audit/log');
-const { AI_FALLBACK_MESSAGE_ID } = require('../../i18n/ai-fallback');
-
-const RagAnswerSchema = require('./schemas').RagAnswerSchema;
 
 const BodySchema = z.object({
   question: z.string().min(3).max(500),
@@ -29,84 +39,51 @@ async function handler(req, res, next) {
         details: parsedBody.error.issues,
       });
     }
-    const { question, topK = 5 } = parsedBody.data;
+    const { question } = parsedBody.data;
     const tenantId = req.tenantId || 'default';
-    const settings = await getSettings();
-    const basePrompt = settings.language === 'en' ? BAILEYS_AI_SYSTEM_PROMPT_EN : BAILEYS_AI_SYSTEM_PROMPT_ID;
-    const systemPrompt = buildSystemPrompt({
-      settings,
-      tenantName: 'Tenant',
-      language: settings.language,
-      basePrompt,
-    });
 
-    const { chunks, retrievalScore } = await hybridRetrieval({
-      query: question,
-      scope: 'team',
-      chatId: null, // Spec 1: team scope = in-app chat, must opt out of chat filter.
-      topK,
-    });
-
-    const userPrompt = buildUserPrompt({
-      question,
-      contextChunks: chunks,
-      chatHistory: [],
-      contactPhone: undefined,
-    });
-
-    let parsed;
+    let result;
     try {
-      const r = await createChatCompletion({
-        systemPrompt,
-        userPrompt,
-        jsonSchema: { name: 'rag_answer', schema: { type: 'object', additionalProperties: true } },
+      result = await runInternalChat({
+        question,
+        llm,
+        scope: { mode: SCOPE_INTERNAL },
       });
-      const parsedR = await parseStructuredOutput({
-        rawText: r.content,
-        schema: RagAnswerSchema,
-        llmClient: { createChatCompletion },
-        systemPrompt,
-        userPrompt,
-      });
-      parsed = parsedR.parsed;
     } catch (err) {
-      await audit.write('auto_reply_hold', { tenantId, reason: 'ask_parse_failure', error: String(err.message) });
-      return res.json({
-        kind: 'fallback',
-        message: AI_FALLBACK_MESSAGE_ID,
-        generatedAt: Date.now(),
+      await audit.write('ask_error', { tenantId, error: String(err.message) });
+      return res.status(502).json({
+        error: 'LlmError',
+        message: 'The assistant could not be reached.',
         question,
       });
     }
 
-    if (parsed.fallback_used || parsed.confidence < (settings.whatsappAutoReply?.confidenceThreshold ?? 0.3)) {
-      // eslint-disable-next-line no-console
-      console.log(`[ask] LLM returned fallback_used=${parsed.fallback_used} confidence=${parsed.confidence} threshold=${settings.whatsappAutoReply?.confidenceThreshold ?? 0.3}`);
-      await audit.write('auto_reply_hold', { tenantId, reason: 'low_confidence_or_fallback', fallback_used: !!parsed.fallback_used, confidence: parsed.confidence });
-      return res.json({
-        kind: 'fallback',
-        message: AI_FALLBACK_MESSAGE_ID,
-        generatedAt: Date.now(),
-        question,
-      });
-    }
+    // Evidence is the tool trail rather than KB citation markers: for an
+    // internal answer, which queries it was built from is the useful record.
+    const evidence = result.toolCalls.map((t) => ({
+      kind: 'tool',
+      entryId: t.name,
+      excerpt: t.why || `${t.name}(${JSON.stringify(t.input).slice(0, 160)})`,
+      source: t.name,
+      confidence: result.grounded ? 1 : 0,
+    }));
 
-    const evidence = (parsed.citations || []).map((marker, i) => {
-      const c = chunks[marker - 1] || chunks[i];
-      return {
-        kind: 'kb',
-        entryId: c && c.chunk && c.chunk.id,
-        excerpt: c && c.chunk && c.chunk.text ? c.chunk.text.slice(0, 300) : '',
-        source: (c && c.chunk && c.chunk.metadata && c.chunk.metadata.file) || 'kb',
-        confidence: parsed.confidence,
-      };
+    await audit.write('endpoint_hit', {
+      tenantId,
+      method: 'POST',
+      path: '/api/crm/ai/ask',
+      status: 200,
+      grounded: result.grounded,
+      rounds: result.rounds,
+      tools: result.toolCalls.map((t) => t.name),
     });
-
-    await audit.write('endpoint_hit', { tenantId, method: 'POST', path: '/api/crm/ai/ask', status: 200 });
     return res.json({
       kind: 'answered',
-      answer: parsed.answer,
-      confidence: parsed.confidence,
+      answer: result.answer,
+      // "Did this come from your data?" is the signal that matters here. The
+      // old self-reported float was being used to suppress answers outright.
+      confidence: result.grounded ? 1 : 0,
+      grounded: result.grounded,
       evidence,
       generatedAt: Date.now(),
       question,

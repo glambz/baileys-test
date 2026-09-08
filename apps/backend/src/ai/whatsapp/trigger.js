@@ -12,12 +12,7 @@ const {
   ForbiddenTransitionError,
 } = require('./handoff');
 const { sendReply } = require('./send');
-const {
-  createChatCompletion,
-  buildUserPrompt,
-  parseStructuredOutput,
-  WhatsAppAutoReplyDecisionSchema,
-} = require('../llm');
+const { createChatCompletion, buildUserPrompt } = require('../llm');
 
 // BUG-DUPLICATE-REPLIES fix (2026-07-23): Baileys fires messages.upsert
 // multiple times for the same message id (e.g. once as a notify stub,
@@ -44,6 +39,8 @@ const episodic = require('../store/episodic');
 const summaryStore = require('../settings/summary');
 const escalationStore = require('../settings/escalation');
 const { startTyping } = require('../../whatsapp/typing');
+const { runInternalChat } = require('../chat/internalAgent');
+const { SCOPE_CHAT } = require('../tools/dbTools');
 const { currentAccountId } = require('../../whatsapp/account');
 
 const EPISODIC_TOPK = Number(process.env.EPISODIC_TOPK || 10);
@@ -84,6 +81,52 @@ function extractNumbers(text) {
     .replace(/(\d),(\d)/g, '$1$2');   // 5,000,000 -> 5000000
   const m = cleaned.match(/-?\d+(\.\d+)?/g);
   return m ? m.map((n) => n.replace(/\.0+$/, '')) : [];
+}
+
+// Smallest figure we will try to derive. Below this, ids ("rec_t1"),
+// quantities and field counts dominate the source text, and a pool of small
+// integers makes almost any small number "derivable" — so those keep the
+// literal check only.
+const DERIVABLE_MIN = 1000;
+const DERIVABLE_POOL_MAX = 40;   // distinct operands considered
+const DERIVABLE_STATES_MAX = 50000; // reachable-sum ceiling; over it we bail to escalation
+
+/**
+ * True if `target` is the exact sum of some subset of `pool`.
+ *
+ * The numerical gate was written when every fact in an answer was a literal
+ * quote from a KB chunk, so `sources.includes(n)` was the whole test. With
+ * the read-only tool layer that premise broke: asked "total tagihan saya",
+ * the model calls query_records, gets 7500000 and 2500000, and answers
+ * 10000000 — arithmetic that is correct and fully traceable to the contact's
+ * own rows, but appears verbatim nowhere, so the gate suppressed a good
+ * reply at random. Prompting the model to always route totals through
+ * aggregate_records is not a gate (it disobeyed, then over-corrected into
+ * the fallback phrase). This is: a derived figure is accepted only when it
+ * provably adds up out of figures that ARE in the sources.
+ *
+ * Bailing out (returning false) escalates to a human, so every bound here
+ * fails safe.
+ */
+function isDerivableSum(target, pool) {
+  if (!Number.isFinite(target) || target < DERIVABLE_MIN) return false;
+  const operands = Array.from(new Set(pool))
+    .filter((v) => Number.isFinite(v) && v > 0 && v <= target)
+    .sort((a, b) => b - a)
+    .slice(0, DERIVABLE_POOL_MAX);
+  if (operands.length < 2) return false;
+  let reachable = new Set([0]);
+  for (const v of operands) {
+    const next = new Set(reachable);
+    for (const sum of reachable) {
+      const acc = sum + v;
+      if (acc === target) return true;
+      if (acc < target) next.add(acc);
+    }
+    if (next.size > DERIVABLE_STATES_MAX) return false; // too wide to verify
+    reachable = next;
+  }
+  return false;
 }
 
 async function processInboundMessage(inboundMsg, ctx) {
@@ -334,22 +377,49 @@ async function processInboundMessage(inboundMsg, ctx) {
   // The LLM call can take 5-30s, well past Baileys' ~5s presence auto-clear,
   // so startTyping() refreshes the indicator on a fixed cadence.
   const stopTyping = startTyping(sock, chatId);
-  const llmClient = { createChatCompletion };
   let parsed;
+  // Tool output the model actually saw this turn. The numerical grounding
+  // check below validates every figure in the reply against retrieved text;
+  // now that the auto-reply can look records up, that text has to include
+  // tool results or a correct answer would read as a hallucination.
+  let toolGroundingText = '';
+  let agentToolCalls = [];
   try {
-    const r = await createChatCompletion({
-      systemPrompt,
-      userPrompt,
-      jsonSchema: { name: 'wa_decision', schema: zodSchemaShape(WhatsAppAutoReplyDecisionSchema) },
+    // The auto-reply now runs the same tool loop as the internal assistant,
+    // but at CHAT scope: read-only, and restricted to this contact's own
+    // conversation and CRM records. Cross-contact tools are refused by
+    // runTool itself, not by asking the prompt nicely. The safety envelope
+    // is unchanged — every gate below still applies.
+    const agentResult = await runInternalChat({
+      question: body,
+      llm: { createChatCompletion },
+      scope: { mode: SCOPE_CHAT, chatId, contactPhone: phone },
+      // Keep the persona/base prompt and the already-assembled CONTEXT
+      // (retrieved chunks, running summary, episodic history) in play.
+      basePrompt: systemPrompt,
+      extraContext: userPrompt,
     });
-    const parsedR = await parseStructuredOutput({
-      rawText: r.content,
-      schema: WhatsAppAutoReplyDecisionSchema,
-      llmClient,
-      systemPrompt,
-      userPrompt,
-    });
-    parsed = parsedR.parsed;
+    toolGroundingText = agentResult.groundingText || '';
+    agentToolCalls = agentResult.toolCalls || [];
+
+    // A missing confidence means the decision contract was not honoured. Do
+    // NOT default it — defaulting high would bypass the confidence gate and
+    // send an unvetted reply to a customer. Treat it as a parse failure so
+    // the chat escalates to a human instead.
+    if (typeof agentResult.confidence !== 'number') {
+      stopTyping();
+      return escalate('parse_failure', {
+        error: 'agent returned no confidence',
+        rounds: agentResult.rounds,
+      });
+    }
+    parsed = {
+      answer: agentResult.answer,
+      citations: agentResult.citations || [],
+      confidence: agentResult.confidence,
+      fallback_used: agentResult.fallback_used === true,
+      reasoning: agentResult.reasoning,
+    };
   } catch (err) {
     stopTyping();
     return escalate('parse_failure', { error: String(err.message) });
@@ -408,10 +478,21 @@ async function processInboundMessage(inboundMsg, ctx) {
     // hallucination (number not in the KB) from a retrieval miss (number
     // exists in the KB but didn't make the top-5).
     const nums = extractNumbers(parsed.answer);
+    // Operand pool for the derived-figure check below: every number that
+    // appears in a source, normalised the same way the answer's numbers are.
+    const groundedPool = extractNumbers(
+      chunks.map((c) => c.chunk.text || '').join('\n') + '\n' + allKbText + '\n' + toolGroundingText
+    ).map(Number);
     for (const n of nums) {
       const inRetrieved = chunks.some((c) => (c.chunk.text || '').includes(n));
       const inKb = allKbText.includes(n);
-      if (!inRetrieved && !inKb) {
+      // A figure the model read out of a tool result is grounded too — it
+      // came from this contact's own row, which is exactly what the tools
+      // exist to surface.
+      const inTools = toolGroundingText.includes(n);
+      // … and so is a total it added up out of those rows.
+      const derived = !inRetrieved && !inKb && !inTools && isDerivableSum(Number(n), groundedPool);
+      if (!inRetrieved && !inKb && !inTools && !derived) {
         return escalate(
           'ungrounded_number',
           { number: n },
@@ -432,6 +513,7 @@ async function processInboundMessage(inboundMsg, ctx) {
       await audit0.write('auto_reply_sent', {
         chatId,
         tenantId,
+        tools: agentToolCalls.map((t) => t.name),
         confidence: parsed.confidence,
         citations: (parsed.citations || []).length,
         retrievalScore,
@@ -446,11 +528,4 @@ async function processInboundMessage(inboundMsg, ctx) {
   }
 }
 
-function zodSchemaShape(zodSchema) {
-  // Best-effort conversion to plain JSON schema for the LLM gateway.
-  // zod doesn't expose its schema directly; we hand off to the parser.
-  // The structured outputs call uses the zod schema via parseStructuredOutput.
-  return { type: 'object', additionalProperties: true };
-}
-
-module.exports = { processInboundMessage, derivePhone };
+module.exports = { processInboundMessage, derivePhone, isDerivableSum, extractNumbers };

@@ -32,8 +32,25 @@ function isRetryable(err) {
   return false;
 }
 
+// The persona prompt instructs the model to close every supported sentence
+// with a [n] citation marker (base-prompts.js, "Format jawaban dengan
+// citation [n]"). That is right for grounding and wrong for the customer:
+// the markers were reaching WhatsApp verbatim — observed "…untuk Paket A [3]."
+// Stripping here, at the one choke point every outbound reply passes
+// through, keeps the sent text, the stored body and the chat preview
+// identical. The locked fallback phrase carries no marker, so it is
+// byte-identical through this.
+const CITATION_MARKER = /[ \t]*\[\d{1,3}\](?=[\s.,;:!?)’'"]|$)/g;
+function stripCitations(text) {
+  return String(text || '')
+    .replace(CITATION_MARKER, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 async function sendReply({ sock, chatId, body, tenantId, isFallback }) {
   tenantId = tenantId || 'default';
+  body = stripCitations(body);
   const maxRetries = Number(process.env.ANTI_BAN_MAX_SEND_RETRIES || 3);
   let attempt = 0;
   let lastErr;
@@ -113,4 +130,4 @@ async function sendReply({ sock, chatId, body, tenantId, isFallback }) {
   throw new SendFailedError(lastErr ? lastErr.message : 'send failed', lastErr);
 }
 
-module.exports = { sendReply, SendFailedError };
+module.exports = { sendReply, SendFailedError, stripCitations };
