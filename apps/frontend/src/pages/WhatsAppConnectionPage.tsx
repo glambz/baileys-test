@@ -187,13 +187,19 @@ export default function WhatsAppConnectionPage() {
     setStatusCheckedAt(new Date().toLocaleTimeString());
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (options?: { force?: boolean }) => {
     setConfirmLogout(false);
     setLogoutError(null);
     setLogoutResult(null);
     try {
-      const res = await logout.mutateAsync();
+      const res = await logout.mutateAsync(options ?? {});
       setLogoutResult(res);
+      // Nothing was deleted, so the QR panel and chat caches still describe a
+      // live session. Leave them alone.
+      if (res.credentialsKept) {
+        await qc.invalidateQueries({ queryKey: ['auth', 'status'] });
+        return;
+      }
       // Clear the stale QR panel: any QR shown belonged to the session that
       // just ended, and the chat caches now belong to no account.
       setQrResult(null);
@@ -441,7 +447,13 @@ export default function WhatsAppConnectionPage() {
             </Button>
 
             {logoutResult && (
-              <Outcome tone={logoutResult.sessionCleared === false ? 'warn' : 'ok'}>
+              <Outcome
+                tone={
+                  logoutResult.credentialsKept || logoutResult.sessionCleared === false
+                    ? 'warn'
+                    : 'ok'
+                }
+              >
                 <p className="font-medium">{logoutResult.message}</p>
                 <ul className="list-inside list-disc">
                   <li>
@@ -459,6 +471,31 @@ export default function WhatsAppConnectionPage() {
                   <p className="text-muted-foreground">
                     Catatan unlink: {logoutResult.unlinkError}
                   </p>
+                )}
+                {/* Credentials are the only thing that can unlink the device,
+                    so the backend keeps them when the unlink fails. Say so,
+                    and make both ways forward explicit rather than leaving
+                    the operator with a bare "ter-unlink: tidak". */}
+                {logoutResult.credentialsKept && (
+                  <div className="mt-2 space-y-2">
+                    <p>
+                      Sesi lokal <strong>tidak dihapus</strong>, jadi perangkat masih bisa
+                      di-unlink nanti. Sambungkan ulang (Inisialisasi koneksi), lalu logout
+                      lagi agar tautannya benar-benar dilepas.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleLogout({ force: true })}
+                      disabled={logout.isPending}
+                    >
+                      Hapus sesi lokal saja (perangkat tetap tertaut)
+                    </Button>
+                    <p className="text-muted-foreground">
+                      Pilihan ini menghapus kredensial tanpa melepas tautan, sehingga
+                      perangkat harus dihapus manual dari WhatsApp &gt; Perangkat Tertaut.
+                    </p>
+                  </div>
                 )}
               </Outcome>
             )}

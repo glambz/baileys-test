@@ -13,6 +13,12 @@ import { apiClient } from '@/lib/apiClient';
  * string, because both halves can fail independently — the unlink needs a
  * live socket, and the file wipe can be blocked by the filesystem. Render
  * these fields instead of assuming a 200 means everything worked.
+ *
+ * When the unlink cannot be sent (socket down), the backend now KEEPS the
+ * local credentials and returns credentialsKept:true, because those
+ * credentials are the only thing that can ever unlink the device — deleting
+ * them used to strand it under Linked Devices permanently. Pass
+ * `{ force: true }` to accept that outcome and wipe locally anyway.
  */
 export interface AuthLogoutResult {
   message: string;
@@ -22,13 +28,29 @@ export interface AuthLogoutResult {
   sessionCleared?: boolean;
   filesRemoved?: number;
   filesFailed?: string[];
-  /** Present when the unlink was attempted and failed. */
+  /** Set when the unlink could not be sent, or was sent and failed. */
   unlinkError?: string | null;
+  /**
+   * The unlink was requested but did not happen, so the local session was
+   * deliberately preserved and nothing was deleted. Retry once reconnected,
+   * or logout({ force: true }) to wipe locally and clean the phone by hand.
+   */
+  credentialsKept?: boolean;
+}
+
+export interface AuthLogoutOptions {
+  /** Keep the device paired on the phone; drop only the local session. */
+  unlinkDevice?: boolean;
+  /** Wipe locally even though the unlink failed. */
+  force?: boolean;
 }
 
 export function useAuthLogout() {
-  return useMutation<AuthLogoutResult>({
-    mutationFn: async () =>
-      apiClient<AuthLogoutResult>('/auth/logout', { method: 'POST' }),
+  return useMutation<AuthLogoutResult, Error, AuthLogoutOptions | void>({
+    mutationFn: async (options) =>
+      apiClient<AuthLogoutResult>('/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify(options || {}),
+      }),
   });
 }

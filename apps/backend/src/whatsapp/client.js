@@ -14,6 +14,11 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const inbox = require('../inbox/writer');
 
+// Upper bound on the remove-companion-device round trip. Baileys' own
+// defaultQueryTimeoutMs is 60s, which is far too long to hold an HTTP
+// request open on a socket that may be half-open.
+const UNLINK_TIMEOUT_MS = 15_000;
+
 const CONNECTION_STATES = Object.freeze({
   CLOSE: 'close',
   CONNECTING: 'connecting',
@@ -32,6 +37,7 @@ class WhatsAppClient {
     this._initializing = false;
     this._tearingDown = false;
     this._reconnectAttempts = 0;
+    this._reconnectPending = false;
     this._wasEverOpen = false;
     this._sockGen = 0;
   }
@@ -39,11 +45,16 @@ class WhatsAppClient {
   isConnected() {
     if (this.state !== CONNECTION_STATES.OPEN) return false;
     if (!this.sock) return false;
-    // Baileys sockets expose the underlying WebSocket via `sock.ws`
+    // Baileys wraps the socket: `sock.ws` is a WebSocketClient exposing
+    // isOpen/isClosed/isClosing getters, and the raw ws lives at `sock.ws.socket`.
+    // The old check read `ws.readyState`, which the wrapper does not define, so
+    // `typeof undefined === 'number'` was false and this fell straight through
+    // to `return true` — the liveness test has never actually run, and every
+    // caller (sendTextMessage included) treated a half-dead socket as usable.
     const ws = this.sock.ws;
-    if (ws && typeof ws.readyState === 'number') {
-      return ws.readyState === 1; // OPEN
-    }
+    if (!ws) return true;
+    if (typeof ws.isOpen === 'boolean') return ws.isOpen;
+    if (typeof ws.readyState === 'number') return ws.readyState === 1; // OPEN
     return true;
   }
 
@@ -54,6 +65,11 @@ class WhatsAppClient {
       user: this.user,
       lastError: this.lastError,
       reconnectAttempts: this._reconnectAttempts,
+      // Without these, a client stuck mid-initialize looks identical to an
+      // idle one: state 'close', no error, nothing pending. That ambiguity is
+      // what made a latched _initializing invisible until the logs were read.
+      initializing: this._initializing,
+      reconnectPending: this._reconnectPending,
     };
   }
 
@@ -64,18 +80,18 @@ class WhatsAppClient {
   async initialize() {
     if (this._tearingDown) {
       logger.warn('Tear-down in progress, refusing new initialize()');
-      return;
+      return { started: false, reason: 'tearing-down' };
     }
     if (this._initializing) {
       logger.warn('Initialize already in progress');
-      return;
+      return { started: false, reason: 'already-initializing' };
     }
     if (this.sock) {
       logger.info(
         { state: this.state },
         'Socket already exists, skipping initialize()'
       );
-      return;
+      return { started: false, reason: 'socket-exists' };
     }
 
     this._initializing = true;
@@ -83,6 +99,7 @@ class WhatsAppClient {
     this.lastError = null;
     this._sockGen += 1;
     const myGen = this._sockGen;
+    let started = false;
 
     try {
       if (!fs.existsSync(config.whatsapp.sessionDir)) {
@@ -111,6 +128,21 @@ class WhatsAppClient {
         fireInitQueries: true,
       });
 
+      // A teardown that lands between _sockGen++ above and this assignment
+      // would otherwise be undone here, publishing an already-dead socket as
+      // the live one. Until now the _initializing latch hid this by refusing
+      // any overlapping initialize(); clearing that latch correctly (above)
+      // makes the overlap reachable, so the generation is checked directly.
+      if (this._sockGen !== myGen) {
+        logger.warn({ myGen, currentGen: this._sockGen }, 'Discarding socket from a superseded initialize()');
+        try {
+          sock.end();
+        } catch (_) {
+          /* nothing to salvage */
+        }
+        this._initializing = false;
+        return;
+      }
       this.sock = sock;
 
       sock.ev.on('creds.update', saveCreds);
@@ -225,6 +257,13 @@ class WhatsAppClient {
         });
       }
 
+      // Reported so a caller can tell "a connect attempt is now under way"
+      // from "I declined to start one". All three guards above used to bare
+      // return, exactly like success, so POST /api/auth/init answered
+      // "authentication initiated" while doing nothing at all — which is how
+      // a wedged client stayed invisible through repeated init attempts.
+      started = true;
+
       sock.ev.on('connection.update', (update) => {
         if (this._sockGen !== myGen) {
           logger.debug(
@@ -244,6 +283,7 @@ class WhatsAppClient {
       logger.error({ err }, 'Failed to initialize WhatsApp client');
       throw err;
     }
+    return { started, reason: started ? null : 'superseded' };
   }
 
   async _handleConnectionUpdate(update, gen) {
@@ -256,13 +296,22 @@ class WhatsAppClient {
           qrcode.toDataURL(qr),
           qrcode.toBuffer(qr, { type: 'png' }),
         ]);
+        // Two awaits happened above; a teardown in that window means this QR
+        // belongs to a socket that no longer exists, and publishing it would
+        // show the operator a code that can never complete.
+        if (this._sockGen !== gen) return;
         this.lastQR = dataUrl;
         this.lastQRBuffer = buffer;
         this.state = CONNECTION_STATES.QR;
-        this._initializing = false;
         logger.info('New QR code generated. Scan with WhatsApp > Linked Devices.');
       } catch (err) {
+        // Rendering failed, but the socket is still alive and will emit
+        // another qr event. Releasing the latch here matters because it used
+        // to sit inside this try, after the awaits, so a qrcode failure
+        // latched initialize() shut for good.
         logger.error({ err }, 'Failed to generate QR code');
+      } finally {
+        this._initializing = false;
       }
       return;
     }
@@ -298,6 +347,19 @@ class WhatsAppClient {
       const isLoggedOut = statusCode === DisconnectReason.loggedOut;
 
       this.state = CONNECTION_STATES.CLOSE;
+      // `user` described a live pairing; it was only ever nulled by
+      // _clearSession(), so a plain disconnect left /api/auth/status naming
+      // the account as though it were still attached.
+      this.user = null;
+      // This connect attempt is over. Without this the latch set by
+      // initialize() survives forever whenever a socket dies BEFORE it ever
+      // emits a qr event or reaches 'open' — which is exactly what a
+      // WebSocket-level failure (ECONNREFUSED, DNS, TLS) does. It was only
+      // cleared in the 'qr' and 'open' branches, so after one refused
+      // connection every later initialize() returned at "Initialize already
+      // in progress", the scheduled reconnect below cancelled itself on the
+      // same flag, and the service sat closed until the container restarted.
+      this._initializing = false;
       this.lastError =
         lastDisconnect?.error?.message || 'Connection closed';
       logger.warn(
@@ -308,10 +370,13 @@ class WhatsAppClient {
       // Tear down the dead socket so the next initialize() is clean.
       await this._teardownSocket();
 
-      // Only wipe credentials if we had previously been authenticated
-      // and WhatsApp explicitly told us we're logged out. Don't wipe on
-      // the very first connect failure (wrong creds, network blip, etc).
-      if (isLoggedOut && this._wasEverOpen) {
+      // A 401 is WhatsApp explicitly rejecting these credentials, which is
+      // categorically different from a network blip (no statusCode) — so the
+      // statusCode alone is the right test. The extra `_wasEverOpen` conjunct
+      // made the wipe process-local: after a container restart the flag is
+      // false again, so invalidated credentials were kept and the client
+      // reconnect-looped on them forever without ever issuing a QR.
+      if (isLoggedOut) {
         await this._clearSession();
         logger.info(
           'Logged out from WhatsApp. Session credentials cleared. Call /api/auth/init to re-authenticate.'
@@ -330,9 +395,19 @@ class WhatsAppClient {
         { attempt: this._reconnectAttempts, delayMs: delay },
         'Scheduling WhatsApp reconnect'
       );
+      // Snapshot the generation AS OF SCHEDULING, not the dead socket's.
+      // _teardownSocket() above increments _sockGen, so the old check
+      // `this._sockGen !== gen` compared against the generation that had
+      // just been superseded and was therefore ALWAYS true — every
+      // scheduled reconnect returned at that line and auto-reconnect never
+      // ran once, for any disconnect. The intent was "abort if something
+      // newer has happened since we scheduled", which is what this does.
+      const genAtSchedule = this._sockGen;
+      this._reconnectPending = true;
       setTimeout(() => {
+        this._reconnectPending = false;
         // Guard against stale generation and overlapping re-init
-        if (this._sockGen !== gen) return;
+        if (this._sockGen !== genAtSchedule) return;
         if (this.sock || this._initializing || this._tearingDown) return;
         this.initialize().catch((err) =>
           logger.error({ err }, 'Auto-reconnect failed')
@@ -421,8 +496,23 @@ class WhatsAppClient {
     this.lastQR = null;
     this.lastQRBuffer = null;
     this._reconnectAttempts = 0;
+    this._reconnectPending = false;
     this._wasEverOpen = false;
     return files;
+  }
+
+  /**
+   * True while creds.json is on disk. That file is the only thing that can
+   * authenticate a `remove-companion-device`, so "are the credentials gone?"
+   * is the question the operator actually needs answered — not "did our
+   * delete loop throw?", which is what sessionCleared used to report.
+   */
+  _credsExist() {
+    try {
+      return fs.existsSync(path.join(config.whatsapp.sessionDir, 'creds.json'));
+    } catch (_) {
+      return false;
+    }
   }
 
   /**
@@ -432,30 +522,98 @@ class WhatsAppClient {
    * Order matters. Baileys' sock.logout() sends `remove-companion-device`
    * over the live socket, so it has to run BEFORE the socket is torn down —
    * otherwise the device stays listed under Linked Devices on the phone and
-   * only the local copy is discarded. That was the previous behaviour: this
-   * method never called Baileys' logout at all.
+   * only the local copy is discarded.
    *
-   * @param {{unlinkDevice?: boolean}} [opts] pass unlinkDevice:false to keep
-   *   the device paired and only drop the local session.
+   * The unlink used to be gated on isConnected(). When the socket was down
+   * the whole block was skipped: no request, no error, and a reply of
+   * deviceUnlinked:false / unlinkError:null that is indistinguishable from
+   * success. The local wipe then ran anyway and deleted creds.json — the one
+   * credential that can ever send the unlink — so the device was stranded on
+   * the operator's phone permanently, consuming a linked-device slot with no
+   * way back short of removing it by hand. Connectivity is now a diagnostic,
+   * not a precondition, and the wipe is gated on the outcome of the thing
+   * that was actually requested.
+   *
+   * @param {{unlinkDevice?: boolean, force?: boolean}} [opts]
+   *   unlinkDevice:false — keep the device paired, drop only the local session.
+   *   force:true — wipe locally even though the unlink failed, accepting that
+   *     the device stays listed on the phone until removed there by hand.
    */
   async logout(opts) {
     const unlinkDevice = !opts || opts.unlinkDevice !== false;
+    const force = Boolean(opts && opts.force);
     let deviceUnlinked = false;
     let unlinkError = null;
 
-    if (unlinkDevice && this.sock && this.isConnected()) {
-      try {
-        await this.sock.logout();
-        deviceUnlinked = true;
-      } catch (err) {
-        // A failed unlink must not block the local wipe — otherwise a
-        // network blip leaves the operator unable to switch accounts.
-        unlinkError = String((err && err.message) || err);
-        logger.warn({ err }, 'WhatsApp device unlink failed; clearing locally anyway');
+    // NOTE ON WHAT deviceUnlinked CAN MEAN. Baileys' logout() sends the
+    // remove-companion-device iq via sendNode() and then ends the socket
+    // itself; it never waits for WhatsApp to acknowledge the removal. So a
+    // resolved call means "the unlink request left this machine", which is
+    // the strongest fact available here — not "the phone has dropped the
+    // device". The gate below is still correct (a request that was never
+    // even sent must not cost us the credentials), but the wording of the
+    // result deliberately stops short of claiming confirmed removal.
+    if (unlinkDevice) {
+      if (!this.sock) {
+        unlinkError =
+          'Not connected to WhatsApp, so the unlink was never sent. Reconnect and log out again, ' +
+          'or repeat with force to discard the local session and remove the device from your phone by hand.';
+        logger.warn('Logout requested with no socket; unlink not attempted');
+      } else {
+        try {
+          // Bounded deliberately. Baileys' logout() writes the
+          // remove-companion-device iq with sendNode(), whose write is capped
+          // by connectTimeoutMs — 60s here — and a half-open TCP connection
+          // still reports ws.readyState === 1, so an unbounded await can hang
+          // this HTTP request for a full minute and 504 behind a proxy before
+          // the operator ever sees the result. On an already-closed socket it
+          // throws 'Connection Closed' immediately instead, which is why
+          // attempting the unlink unconditionally is safe.
+          await Promise.race([
+            this.sock.logout(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('unlink timed out after 15s')), UNLINK_TIMEOUT_MS)
+            ),
+          ]);
+          deviceUnlinked = true;
+        } catch (err) {
+          unlinkError = String((err && err.message) || err);
+          logger.warn({ err }, 'WhatsApp device unlink failed');
+        }
       }
     }
 
+    // Keep the credentials when the caller asked for an unlink that did not
+    // happen: destroying them is irreversible and strands the device.
+    const keepCreds = unlinkDevice && !deviceUnlinked && !force;
+
     await this._teardownSocket();
+    // Every path here ends any in-flight connect attempt. Leaving the latch
+    // set left the client unable to re-pair at all: no credentials, and
+    // initialize() refusing with "Initialize already in progress".
+    this._initializing = false;
+
+    if (keepCreds) {
+      this.state = CONNECTION_STATES.CLOSE;
+      this.user = null;
+      this.lastQR = null;
+      this.lastQRBuffer = null;
+      // Reported as the reason this logout stopped short, rather than
+      // whatever killed the previous socket.
+      this.lastError = unlinkError;
+      return {
+        message:
+          'Logout stopped: the device could not be unlinked, so the local session was kept. ' +
+          'Reconnect and log out again to unlink it properly, or retry with force to wipe locally anyway.',
+        deviceUnlinked: false,
+        sessionCleared: false,
+        credentialsKept: true,
+        filesRemoved: 0,
+        filesFailed: [],
+        unlinkError,
+      };
+    }
+
     const files = await this._clearSession();
 
     // The LID->PN map and the stored self number describe the account that
@@ -468,19 +626,25 @@ class WhatsAppClient {
     }
 
     this.state = CONNECTION_STATES.CLOSE;
+    // A stale error from the socket that just died was being served by
+    // /api/auth/status long after the session it belonged to was gone.
+    this.lastError = null;
 
-    const sessionCleared = files.failed.length === 0;
+    // "No credentials remain" rather than "our delete loop did not throw".
+    // A successful sock.logout() makes Baileys emit close(401), whose handler
+    // already wipes the directory, so the old check reported filesRemoved:0
+    // with sessionCleared:true on the happy path and could not distinguish
+    // that from having had nothing to clear.
+    const sessionCleared = files.failed.length === 0 && !this._credsExist();
     return {
-      // Report what happened rather than a fixed success string. The old
-      // hardcoded "Logged out and session cleared" was returned even when
-      // nothing had been deleted.
       message: sessionCleared
         ? (deviceUnlinked
-          ? 'Logged out, device unlinked, and local session cleared.'
+          ? 'Logged out and the unlink request was sent, so the device should drop off Linked Devices. Local session cleared.'
           : 'Local session cleared. The device may still appear under Linked Devices.')
         : 'Logout incomplete: some session files could not be removed.',
       deviceUnlinked,
       sessionCleared,
+      credentialsKept: false,
       filesRemoved: files.cleared,
       filesFailed: files.failed,
       unlinkError,
@@ -564,3 +728,6 @@ function pinoLogger() {
 
 module.exports = new WhatsAppClient();
 module.exports.CONNECTION_STATES = CONNECTION_STATES;
+// The app uses the singleton; the class is exported so the connection
+// lifecycle can be driven in tests without opening a real socket.
+module.exports.WhatsAppClient = WhatsAppClient;
