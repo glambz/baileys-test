@@ -20,3 +20,9 @@ kilo.*
 upgrade-to-full.ps1
 !.env.example
 .env.bak
+
+# The blanket `.*` rule above hides dotfiles. These must be tracked:
+# a missing .dockerignore silently bakes .env and the paired WhatsApp
+# session into the built image.
+!.dockerignore
+!.gitignore

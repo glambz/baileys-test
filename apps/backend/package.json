@@ -1,0 +1,66 @@
+{
+  "name": "@baileys/backend",
+  "version": "0.7.0-be-ai-auto-reply.0",
+  "packageManager": "pnpm@10.27.0",
+  "description": "RESTful API for WhatsApp using @whiskeysockets/baileys with QR auth, persistent sessions, and message sending.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "dotenv -e .env -- node src/index.js",
+    "dev": "concurrently -k -n sidecar,be -c cyan,yellow \"dotenv -e .env -- python src/scripts/embed_sidecar.py\" \"dotenv -e .env -- nodemon src/index.js\"",
+    "dev:be-only": "dotenv -e .env -- nodemon src/index.js",
+    "dev:sidecar": "dotenv -e .env -- python src/scripts/embed_sidecar.py",
+    "dev:all": "concurrently -n BE,FE -c blue,green \"pnpm dev\" \"pnpm --filter @baileys/frontend dev\"",
+    "lint": "echo \"No linter configured\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate": "dotenv -e .env -- node src/db/migrate.js",
+    "db:check": "dotenv -e .env -- node src/db/check.js",
+    "db:install-pgvector": "node src/db/check.js --install",
+    "db:seed": "dotenv -e .env -- node src/db/seed.js",
+    "db:reset": "node -e \"const {resetSchema}=require('./src/db/client'); resetSchema()\" && pnpm db:migrate && pnpm db:seed",
+    "db:status": "node -e \"require('./src/db/migrate').status()\"",
+    "script:ingest-smoke": "cross-env RUN_SMOKE=1 node src/scripts/ingest-smoke.js",
+    "script:audit-tail": "node src/scripts/audit-tail.js",
+    "script:mock-inbound": "node src/scripts/mock-inbound.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "kysely": "^0.27.0",
+    "mammoth": "^1.8.0",
+    "multer": "^1.4.5-lts.1",
+    "nanoid": "^5.0.0",
+    "openai": "^4.55.0",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.12.0",
+    "pino": "^9.3.2",
+    "pino-pretty": "^11.2.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.21.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3",
+    "cross-env": "^7.0.3",
+    "dotenv-cli": "^7.0.0",
+    "nodemon": "^3.1.4",
+    "supertest": "^7.0.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "rest-api",
+    "nodejs"
+  ],
+  "license": "MIT"
+}

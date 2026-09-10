@@ -1,0 +1,189 @@
+# Baileys Studio — WhatsApp auto-reply + CRM + AI assistant.
+#
+#   docker compose up -d --build
+#
+# The `whatsapp` network is the point of this file: other compose projects
+# join it and reach this stack's API by hostname to send WhatsApp messages.
+# See the `networks` block at the bottom for how to attach.
+#
+# Secrets come from apps/backend/.env (gitignored) via env_file. The
+# `environment` blocks below override the host-oriented values in that file
+# with container-oriented ones — compose applies `environment` after
+# `env_file`, so DATABASE_URL and EMBEDDING_BASE_URL point at service names
+# rather than 127.0.0.1.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: baileys-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: baileys
+      POSTGRES_PASSWORD: baileys
+      POSTGRES_DB: baileys
+    ports:
+      # Same host port as the pre-Docker setup so apps/backend/.env and any
+      # local psql/scripts keep working unchanged. NOTE: the standalone
+      # `baileys-pg` container also binds 55432 — stop it first
+      # (`docker stop baileys-pg`) or this service cannot start. See
+      # docs/docker.md for copying its data into this volume.
+      - '55432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U baileys -d baileys']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [whatsapp]
+
+  sidecar:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.sidecar
+    container_name: baileys-sidecar
+    restart: unless-stopped
+    environment:
+      EMBED_SIDECAR_HOST: 0.0.0.0
+      EMBED_SIDECAR_PORT: '8765'
+      EMBEDDING_MODEL_PATH: MarcoAland/Indonesian-bge-m3
+    ports:
+      # Published for the same reason as postgres:55432 — the test suite runs
+      # on the host and reads EMBEDDING_BASE_URL from apps/backend/.env
+      # (127.0.0.1:8765). Without this, `pnpm test` fails with "fetch failed"
+      # once the sidecar moves into a container.
+      - '8765:8765'
+    volumes:
+      # The 2.2 GB model is not baked into the image. By default it lives in a
+      # named volume and is downloaded on first start. To reuse a cache you
+      # already have on the host and skip that download, set HF_CACHE_DIR to
+      # an ABSOLUTE path, e.g. in a root .env:
+      #   HF_CACHE_DIR=C:/Users/you/.cache/huggingface
+      # (compose does not expand `~`, so a tilde here would silently create a
+      # directory literally named "~".) A bare value is read as a volume name.
+      - ${HF_CACHE_DIR:-hf_cache}:/hf
+    healthcheck:
+      # The model takes ~25s to load; start_period covers that so the backend
+      # is not started against a sidecar that is still warming up.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -X POST http://127.0.0.1:8765/v1/embeddings
+          -H 'Content-Type: application/json'
+          -d '{"texts":["ping"]}' > /dev/null
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
+    networks: [whatsapp]
+
+  backend:
+    build:
+      context: ./apps/backend
+    container_name: baileys-backend
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: '3000'
+      # Override the 127.0.0.1 values from .env — inside a container those
+      # would resolve to the backend itself.
+      DATABASE_URL: postgres://baileys:baileys@postgres:5432/baileys
+      EMBEDDING_BASE_URL: http://sidecar:8765
+      EMBEDDING_DIM: '1024'
+      SESSION_DIR: ./auth_info
+      INBOX_LOG_DIR: ./runtime/inbox_logs
+    ports:
+      - '3000:3000'
+    volumes:
+      # Source, read-only. Without this every backend edit needs a full image
+      # rebuild before `docker compose restart` picks it up — which is a
+      # confusing failure mode, because restarting silently keeps serving the
+      # old code. Read-only is safe: everything the app writes (auth_info,
+      # runtime, data) lives outside src and is mounted separately below.
+      # There is no watcher, so a restart is still required — just not a build.
+      - ./apps/backend/src:/app/src:ro
+      # auth_info holds the paired WhatsApp session. It MUST persist or every
+      # restart needs a fresh QR scan.
+      - wa_auth:/app/auth_info
+      - wa_runtime:/app/runtime
+      - kb_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      sidecar:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:3000/api/auth/status > /dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      whatsapp:
+        aliases:
+          # Stable, meaningful hostname for other projects on this network.
+          # Prefer this over the bare service name `backend`, which is too
+          # generic to mean anything from another project's perspective.
+          - whatsapp-api
+
+  frontend:
+    build:
+      context: ./apps/frontend
+    container_name: baileys-frontend
+    restart: unless-stopped
+    environment:
+      VITE_USE_REAL_API: 'true'
+      VITE_API_PROXY_TARGET: http://backend:3000
+      # inotify events do not cross a Windows/macOS bind mount, so Vite never
+      # sees host edits and HMR silently does nothing until the container is
+      # restarted. chokidar (which Vite watches with) falls back to polling
+      # when this is set.
+      CHOKIDAR_USEPOLLING: 'true'
+      CHOKIDAR_INTERVAL: '400'
+    volumes:
+      # Bind the source in so the dev server actually serves what is on disk
+      # and HMR works. Without this the container runs whatever was COPYed at
+      # build time, which makes shipping a dev server pointless — every edit
+      # needed a rebuild. The anonymous volume keeps the image's
+      # node_modules (installed for linux) from being shadowed by the host's.
+      - ./apps/frontend:/app
+      - /app/node_modules
+    ports:
+      - '5176:5176'
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [whatsapp]
+
+volumes:
+  hf_cache:
+  pgdata:
+  wa_auth:
+  wa_runtime:
+  kb_data:
+
+networks:
+  # This project owns the network and creates it with a fixed, unprefixed
+  # name (compose would otherwise call it `baileystest_whatsapp`).
+  #
+  # To let another project send WhatsApp messages through this stack, add to
+  # ITS compose file:
+  #
+  #   networks:
+  #     whatsapp:
+  #       external: true
+  #
+  #   services:
+  #     your-app:
+  #       networks: [default, whatsapp]
+  #
+  # then call the API by hostname, e.g.
+  #   POST http://whatsapp-api:3000/api/messages/send
+  #        {"phone": "628...", "message": "hello"}
+  #
+  # Bring this stack up first — an external network must already exist before
+  # a dependent project can start.
+  whatsapp:
+    name: whatsapp

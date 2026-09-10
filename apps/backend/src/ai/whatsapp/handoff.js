@@ -1,0 +1,157 @@
+'use strict';
+/**
+ * AIReplyMode state machine + DB transitions.
+ * Source: docs/crm/plans/20-whatsapp-trigger-state-machine.md step 1.
+ *
+ * The literal union `'ai' | 'human' | 'human_pending_flag'` is byte-equal
+ * to frontend/src/types/crm.ts:7 and to the SQL CHECK constraint.
+ */
+const { getPool } = require('../../db/client');
+const { currentAccountId } = require('../../whatsapp/account');
+const { contactPhoneFromChatId } = require('../tools/dbTools');
+
+class ForbiddenTransitionError extends Error {
+  constructor(fromMode, toMode) {
+    super(`Cannot transition from ${fromMode} to ${toMode}`);
+    this.name = 'ForbiddenTransitionError';
+    this.fromMode = fromMode;
+    this.toMode = toMode;
+  }
+}
+
+class ChatNotFoundError extends Error {
+  constructor(chatId) {
+    super(`Chat not found: ${chatId}`);
+    this.name = 'ChatNotFoundError';
+    this.chatId = chatId;
+  }
+}
+
+// Allowed transitions (MVP.md §3.4).
+// The BE never auto-flags from human (`human -> human_pending_flag` forbidden),
+// but the operator can re-enable via Plan 21's toggle-mode (human -> ai).
+const ALLOWED = new Set([
+  'ai->human_pending_flag',
+  'ai->human',
+  'human_pending_flag->ai',
+  'human_pending_flag->human',
+  'human->ai',
+]);
+
+function assertTransitionAllowed(fromMode, toMode) {
+  if (!fromMode || !toMode) {
+    throw new ForbiddenTransitionError(fromMode, toMode);
+  }
+  if (fromMode === toMode) return; // idempotent
+  if (!ALLOWED.has(`${fromMode}->${toMode}`)) {
+    throw new ForbiddenTransitionError(fromMode, toMode);
+  }
+}
+
+async function loadChatMode(chatId) {
+  const pool = getPool();
+  const r = await pool.query(
+    'SELECT ai_mode FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
+  );
+  if (r.rows.length === 0) throw new ChatNotFoundError(chatId);
+  return r.rows[0].ai_mode;
+}
+
+async function loadChatContactId(chatId) {
+  // `chats` has no contact_id column and never did — this selected a column
+  // that does not exist, so it threw for every chat. Its only caller
+  // (controllers/ai/replyPreview.js) wraps it in `.catch(() => null)`, which
+  // means the preview has silently run with NO contact scope since it was
+  // written: the retrieval it drives was seeing every contact's records.
+  //
+  // The contact identity comes off the JID, the same way the tool layer
+  // derives it, because `chats.phone` is unreliable (some rows '' and others
+  // '+6289...'). The row lookup stays so an unknown chat still raises
+  // ChatNotFoundError rather than silently scoping to nothing.
+  const pool = getPool();
+  const r = await pool.query(
+    'SELECT phone FROM chats WHERE id = $1 AND account_jid = $2',
+    [chatId, currentAccountId() || '']
+  );
+  if (r.rows.length === 0) throw new ChatNotFoundError(chatId);
+  return contactPhoneFromChatId(chatId) || contactPhoneFromChatId(r.rows[0].phone);
+}
+
+/**
+ * Idempotent upsert: ensures a `chats` row exists for the given JID.
+ * Called on every inbound message so the trigger's first step
+ * (loadChatMode) succeeds for previously-unknown contacts.
+ *
+ * Sets:
+ *   - id = chatId (chat JID is the natural primary key)
+ *   - jid = chatId (mirror of id, preserved for downstream consumers)
+ *   - phone = opts.phone (senderPn-derived phone; may be null)
+ *   - last_message_at = opts.lastMessageAt on insert AND on conflict (updates timestamp)
+ *
+ * Idempotent: running on every message is safe and cheap. The ON CONFLICT
+ * clause does not touch ai_mode / jid, so an operator's per-chat toggle
+ * (human / human_pending_flag) survives subsequent inbound messages.
+ */
+async function upsertChatOnInbound(chatId, opts) {
+  opts = opts || {};
+  if (!chatId) return;
+  const pool = getPool();
+  const phone = opts.phone || null;
+  const lastMessageAt = opts.lastMessageAt || Math.floor(Date.now() / 1000);
+  await pool.query(
+    // ON CONFLICT now targets the composite key. With the old
+    // `ON CONFLICT (id)`, a contact both linked accounts had messaged
+    // collided on one row and kept the first account's ai_mode and
+    // conversation_summary.
+    `INSERT INTO chats (id, jid, phone, last_message_preview, last_message_at, unread_count, account_jid)
+     VALUES ($1, $1, $2, '', $3, 0, $4)
+     ON CONFLICT (account_jid, id) DO UPDATE SET last_message_at = EXCLUDED.last_message_at`,
+    [chatId, phone, lastMessageAt, currentAccountId() || '']
+  );
+}
+
+async function transitionChatMode(chatId, fromMode, toMode, reason) {
+  // Idempotent.
+  if (fromMode === toMode) return;
+  assertTransitionAllowed(fromMode, toMode);
+  const pool = getPool();
+  const r = await pool.query(
+    `UPDATE chats SET ai_mode = $1 WHERE id = $2 AND ai_mode = $3 AND account_jid = $4 RETURNING ai_mode`,
+    [toMode, chatId, fromMode, currentAccountId() || '']
+  );
+  if (r.rows.length === 0) {
+    // Either chat doesn't exist or mode has changed underneath us.
+    const cur = await pool.query(
+      'SELECT ai_mode FROM chats WHERE id = $1 AND account_jid = $2',
+      [chatId, currentAccountId() || '']
+    );
+    if (cur.rows.length === 0) throw new ChatNotFoundError(chatId);
+    throw new ForbiddenTransitionError(cur.rows[0].ai_mode, toMode);
+  }
+  // BUG-PUSH-EVENTS feature (2026-08-03): notify SSE subscribers about
+  // the mode change so the FE SystemHumanHandoffBanner / ThreadHeader
+  // pill can update without polling. Best-effort.
+  try {
+    const events = require('../../api/events');
+    events.publish(chatId, 'chat.mode.changed', {
+      chatId,
+      previousMode: fromMode,
+      currentMode: toMode,
+      reason: reason || null,
+    });
+    if (toMode === 'human_pending_flag') {
+      events.publish(chatId, 'chat.handoff', { chatId, reason: reason || null });
+    }
+  } catch (_) { /* never block on logging */ }
+}
+
+module.exports = {
+  loadChatMode,
+  loadChatContactId,
+  transitionChatMode,
+  upsertChatOnInbound,
+  assertTransitionAllowed,
+  ForbiddenTransitionError,
+  ChatNotFoundError,
+};

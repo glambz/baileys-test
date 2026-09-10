@@ -1,0 +1,30 @@
+# Local embedding sidecar: sentence-transformers serving
+# MarcoAland/Indonesian-bge-m3 (1024-dim) over a tiny HTTP API.
+#
+# The model itself (~2.2 GB) is NOT baked into the image. compose mounts the
+# host Hugging Face cache read-only instead, so the image stays small and the
+# weights are shared with any other tooling on the host.
+FROM python:3.11-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements-sidecar.txt ./
+RUN pip install --no-cache-dir -r requirements-sidecar.txt
+
+COPY src/scripts/embed_sidecar.py ./src/scripts/embed_sidecar.py
+
+# Resolve the model from the mounted cache by repo id. HF_HUB_OFFLINE keeps it
+# from reaching for the network when the cache is already complete.
+ENV HF_HOME=/hf \
+    HF_HUB_OFFLINE=1 \
+    EMBEDDING_MODEL_PATH=MarcoAland/Indonesian-bge-m3 \
+    EMBED_SIDECAR_HOST=0.0.0.0 \
+    EMBED_SIDECAR_PORT=8765
+
+EXPOSE 8765
+
+CMD ["python", "src/scripts/embed_sidecar.py"]
